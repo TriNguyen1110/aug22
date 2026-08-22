@@ -59,7 +59,7 @@ export default async function HomePage() {
           Market intelligence
         </p>
         <h1 className="font-display text-5xl font-semibold leading-tight tracking-tight text-[#eef1f0] sm:text-6xl">
-          Notion Market Watch
+          Meridian
         </h1>
         <p className="mt-5 max-w-2xl text-lg leading-relaxed text-silver">
           A statistics-first view of what people are saying about Notion, Linear, and

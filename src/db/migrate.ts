@@ -15,7 +15,8 @@ export function migrate(dbPath = process.env.DB_PATH ?? './data/app.db') {
 
   db.exec(`
     create table if not exists companies (
-      id text primary key, name text, domain text, role text
+      id text primary key, name text, domain text, role text,
+      industry text, market_share real, size text, niche text
     );
     create table if not exists posts (
       id text primary key, company_id text, source_type text, platform text,
@@ -34,6 +35,15 @@ export function migrate(dbPath = process.env.DB_PATH ?? './data/app.db') {
       value_text text, url text, captured_at text
     );
   `);
+
+  // Existing DB files predate the industry/market_share/size/niche columns added to
+  // CONTRACT.md. `create table if not exists` above is a no-op against an already-
+  // existing table, so backfill the columns here if this DB was created before them.
+  const existingCols = new Set((db.prepare('pragma table_info(companies)').all() as { name: string }[]).map((c) => c.name));
+  if (!existingCols.has('industry')) db.exec('alter table companies add column industry text');
+  if (!existingCols.has('market_share')) db.exec('alter table companies add column market_share real');
+  if (!existingCols.has('size')) db.exec('alter table companies add column size text');
+  if (!existingCols.has('niche')) db.exec('alter table companies add column niche text');
 
   return db;
 }

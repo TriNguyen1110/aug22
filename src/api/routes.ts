@@ -6,8 +6,10 @@
  */
 import type Database from 'better-sqlite3';
 import { readdirSync } from 'node:fs';
+import Anthropic from '@anthropic-ai/sdk';
 import { withSpan } from '../otel';
 import { burstWindow, scoreBurstTerms } from '../detect/burst';
+import { attemptTargetedFetch } from '../ingest/reddit';
 
 export async function getHealth(db: Database.Database) {
   return withSpan('api.health', async (span) => {
@@ -155,9 +157,53 @@ export async function getTrendById(db: Database.Database, id: string) {
   });
 }
 
-export async function getCompetitors(db: Database.Database) {
+const SIZE_ORDER: Record<string, number> = { startup: 0, 'mid-market': 1, enterprise: 2 };
+
+interface CompanyRow {
+  id: string;
+  name: string;
+  domain: string;
+  role: string;
+  industry: string | null;
+  market_share: number | null;
+  size: string | null;
+  niche: string | null;
+}
+
+/**
+ * `industry`/`sort` are both optional query params (CONTRACT.md). No params leaves the
+ * behavior byte-for-byte the same as before this feature: unfiltered, DB-insertion-order
+ * `role = 'competitor'` rows. `industry` matches case-insensitively; `sort` orders the
+ * returned array in JS (not SQL) because `size` is an ordinal category, not a string
+ * ORDER BY can sort correctly on its own.
+ */
+export async function getCompetitors(
+  db: Database.Database,
+  opts: { industry?: string | null; sort?: string | null } = {},
+) {
   return withSpan('api.competitors', async (span) => {
-    const companies = db.prepare(`select * from companies where role = 'competitor'`).all();
+    let companies: CompanyRow[];
+    if (opts.industry) {
+      companies = db
+        .prepare(`select * from companies where role = 'competitor' and industry = ? collate nocase`)
+        .all(opts.industry) as CompanyRow[];
+      span.setAttr('industry_filter', opts.industry);
+    } else {
+      companies = db.prepare(`select * from companies where role = 'competitor'`).all() as CompanyRow[];
+    }
+
+    const sort = opts.sort ?? 'name';
+    span.setAttr('sort', sort);
+    if (sort === 'market_share') {
+      companies = [...companies].sort((a, b) => (b.market_share ?? -Infinity) - (a.market_share ?? -Infinity));
+    } else if (sort === 'size') {
+      companies = [...companies].sort(
+        (a, b) => (SIZE_ORDER[a.size ?? ''] ?? -1) - (SIZE_ORDER[b.size ?? ''] ?? -1),
+      );
+    } else {
+      companies = [...companies].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     const snapshots = db.prepare('select * from competitor_snapshots order by captured_at desc').all();
     span.setRecordCount(companies.length + snapshots.length);
     return { companies, snapshots };
@@ -260,6 +306,153 @@ export async function getPipelineHealth(db: Database.Database) {
 
     span.setRecordCount((naive.records_found as number) + records_extracted);
     return { naive, brightdata };
+  });
+}
+
+const CHAT_STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
+  'to', 'of', 'in', 'on', 'for', 'with', 'at', 'by', 'this', 'that', 'it', 'we',
+  'i', 'you', 'my', 'our', 'their', 'have', 'has', 'had', 'not', 'do', 'does',
+  'did', 'so', 'as', 'if', 'from', 'about', 'they', 'them', 'he', 'she', 'his',
+  'her', 'its', 'us', 'am', 'just', 'can', 'will', 'would', 'could', 'should',
+  'what', 'whats', 'when', 'where', 'who', 'why', 'how', 'tell', 'me', 'know',
+  'any', 'are', 'saying', 'say', 'people', 'users',
+]);
+
+/**
+ * Best-effort keyword/target extraction from a free-text question: prefer a known
+ * company name mentioned in the question (drives both the live Bright Data
+ * subreddit attempt and the DB grounding search toward the same target), otherwise
+ * fall back to the longest non-stopword word in the question. Heuristic on purpose
+ * per CONTRACT.md -- the LLM never decides what to search for, this does.
+ */
+function extractChatTerm(question: string, companyNames: string[]): string {
+  const lower = question.toLowerCase();
+  for (const name of companyNames) {
+    if (lower.includes(name.toLowerCase())) return name;
+  }
+  const words = lower
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !CHAT_STOPWORDS.has(w));
+  if (words.length === 0) return question.trim();
+  return words.reduce((longest, w) => (w.length > longest.length ? w : longest), words[0]);
+}
+
+export interface ChatCitation {
+  post_id: string;
+  quote: string;
+  url: string;
+}
+
+/**
+ * POST /api/chat: live-per-question grounded QA. Attempts one targeted Bright Data
+ * fetch (best-effort, expected to fail while the account is suspended -- reported
+ * honestly via `brightdata`, never silently swallowed), retrieves grounding from
+ * `posts.text` (existing DB rows plus anything freshly ingested this request), and
+ * asks the LLM to answer using ONLY those verbatim quotes. Every returned citation
+ * is independently re-verified server-side as a literal substring of its post's
+ * text -- the model's own claim is not trusted, same defense-in-depth as findings.
+ */
+export async function getChat(db: Database.Database, question: string) {
+  return withSpan('api.chat', async (span) => {
+    span.setAttr('question', question);
+
+    const companyNames = (db.prepare(`select name from companies`).all() as { name: string }[]).map((c) => c.name);
+    const term = extractChatTerm(question, companyNames);
+    span.setAttr('extracted_term', term);
+
+    const brightdataResult = await attemptTargetedFetch(term);
+    span.setAttr('brightdata_attempted', brightdataResult.attempted);
+    span.setAttr('brightdata_ok', brightdataResult.ok);
+    if (brightdataResult.error) span.setAttr('brightdata_error', brightdataResult.error);
+
+    const brightdata = {
+      attempted: brightdataResult.attempted,
+      ok: brightdataResult.ok,
+      records_extracted: brightdataResult.records_extracted,
+      ...(brightdataResult.error ? { error: brightdataResult.error } : {}),
+    };
+
+    const matched = db
+      .prepare(`select * from posts where text like '%' || ? || '%' collate nocase order by posted_at desc limit 10`)
+      .all(term) as PostRow[];
+    span.setRecordCount(matched.length);
+
+    if (matched.length === 0) {
+      span.setAttr('failure_reason', 'zero matched posts, LLM call skipped');
+      return {
+        answer: `I don't have data on that yet. No posts in the corpus mention "${term}".`,
+        citations: [] as ChatCitation[],
+        brightdata,
+      };
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      // Guarded like every other sponsor key (CLAUDE.md pattern): missing key is a
+      // clear, typed failure, not a crash.
+      span.setAttr('failure_reason', 'ANTHROPIC_API_KEY not configured');
+      const err = new Error('ANTHROPIC_API_KEY not configured') as Error & { status: number };
+      err.status = 503;
+      throw err;
+    }
+
+    const postsById = new Map(matched.map((p) => [p.id, p]));
+    const contextBlock = matched
+      .map((p) => `POST_ID: ${p.id}\nSOURCE: ${p.platform} (${p.source_type})\nTEXT: ${p.text}`)
+      .join('\n---\n');
+
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const systemPrompt = `You answer questions using ONLY the quotes below, verbatim. Never invent a fact that is not present in one of these posts. For every claim you make, cite which POST_ID it comes from and include the exact verbatim quote (a real substring of that post's TEXT) you are relying on. If these posts do not actually address the question, say plainly "I don't have data on that" instead of guessing.
+
+Respond as JSON only, matching this shape exactly, no other text:
+{"answer": "<your answer, may reference POST_IDs inline>", "citations": [{"post_id": "<id>", "quote": "<verbatim substring of that post's TEXT>"}]}
+
+POSTS:
+${contextBlock}`;
+
+    let responseText: string;
+    try {
+      const message = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: question }],
+      });
+      const block = message.content.find((b) => b.type === 'text');
+      responseText = block && block.type === 'text' ? block.text : '';
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      span.setAttr('failure_reason', `anthropic call failed: ${reason}`);
+      throw err;
+    }
+
+    let parsedResponse: { answer?: string; citations?: { post_id?: string; quote?: string }[] };
+    try {
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      parsedResponse = JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
+    } catch {
+      span.setAttr('failure_reason', 'model response was not valid JSON');
+      parsedResponse = { answer: responseText, citations: [] };
+    }
+
+    // Defense in depth: the prompt constrains the model, but nothing from the model
+    // is trusted as grounded until independently re-verified against real post text.
+    const citations: ChatCitation[] = [];
+    for (const c of parsedResponse.citations ?? []) {
+      if (!c.post_id || !c.quote) continue;
+      const post = postsById.get(c.post_id);
+      if (!post || !post.text.includes(c.quote)) continue; // ungrounded claim, drop rather than pass through
+      citations.push({ post_id: c.post_id, quote: c.quote, url: post.url });
+    }
+    span.setAttr('citations_verified', citations.length);
+    span.setAttr('citations_claimed', (parsedResponse.citations ?? []).length);
+
+    return {
+      answer: parsedResponse.answer ?? "I don't have data on that.",
+      citations,
+      brightdata,
+    };
   });
 }
 

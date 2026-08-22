@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "migrate": "tsx src/db/migrate.ts",
-    "ingest:reddit": "tsx src/ingest/reddit.ts",
+    "ingest:reddit": "node --env-file=.env.local --import tsx src/ingest/reddit.ts",
     "detect": "tsx src/detect/run.ts",
     "seed": "node tools/seed.mjs",
     "seed:bad": "node tools/seed.mjs --with-bad",
@@ -35,6 +35,7 @@
     "typescript": "^5.6.3"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
     "@heroui/react": "^2.8.6",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",

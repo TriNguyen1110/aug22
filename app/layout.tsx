@@ -19,7 +19,7 @@ const body = Inter({
 });
 
 export const metadata = {
-  title: 'Notion Market Watch',
+  title: 'Meridian',
   description: 'Trend, competitor, and monitoring dashboard for Notion',
 };
 

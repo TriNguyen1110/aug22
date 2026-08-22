@@ -22,7 +22,8 @@ db.pragma('journal_mode = WAL');
 
 db.exec(`
   create table if not exists companies (
-    id text primary key, name text, domain text, role text
+    id text primary key, name text, domain text, role text,
+    industry text, market_share real, size text, niche text
   );
   create table if not exists posts (
     id text primary key, company_id text, source_type text, platform text,
@@ -42,13 +43,35 @@ db.exec(`
   );
 `);
 
+// Backfill columns for DB files created before industry/market_share/size/niche
+// were added to CONTRACT.md's companies schema (create table if not exists is a
+// no-op against an existing table). Kept identical to src/db/migrate.ts.
+{
+  const existingCols = new Set(db.prepare('pragma table_info(companies)').all().map((c) => c.name));
+  if (!existingCols.has('industry')) db.exec('alter table companies add column industry text');
+  if (!existingCols.has('market_share')) db.exec('alter table companies add column market_share real');
+  if (!existingCols.has('size')) db.exec('alter table companies add column size text');
+  if (!existingCols.has('niche')) db.exec('alter table companies add column niche text');
+}
+
 const now = () => new Date().toISOString();
 const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
 
+// industry/market_share/size/niche are illustrative (per CONTRACT.md's "illustrative
+// percentage, not audited" note on market_share) -- realistic-sounding public
+// companies with real domains, not fabricated grounded findings. They exist so
+// GET /api/competitors?industry=&sort= has more than one industry and more than
+// three rows to actually filter/sort over.
 const COMPANIES = [
-  ['co-notion', 'Notion', 'notion.so', 'target'],
-  ['co-linear', 'Linear', 'linear.app', 'competitor'],
-  ['co-asana', 'Asana', 'asana.com', 'competitor'],
+  ['co-notion', 'Notion', 'notion.so', 'target', 'productivity-saas', 18.5, 'mid-market', 'all-in-one docs and wiki'],
+  ['co-linear', 'Linear', 'linear.app', 'competitor', 'productivity-saas', 9.2, 'startup', 'issue tracking for engineering teams'],
+  ['co-asana', 'Asana', 'asana.com', 'competitor', 'productivity-saas', 14.8, 'enterprise', 'work management for cross-functional teams'],
+  ['co-clickup', 'ClickUp', 'clickup.com', 'competitor', 'productivity-saas', 11.3, 'mid-market', 'all-in-one project management and docs'],
+  ['co-coda', 'Coda', 'coda.io', 'competitor', 'productivity-saas', 4.6, 'startup', 'docs that combine with spreadsheets and apps'],
+  ['co-monday', 'monday.com', 'monday.com', 'competitor', 'productivity-saas', 16.1, 'enterprise', 'work OS for teams of any size'],
+  ['co-stripe', 'Stripe', 'stripe.com', 'competitor', 'fintech-infra', 27.4, 'enterprise', 'payments infrastructure for the internet'],
+  ['co-plaid', 'Plaid', 'plaid.com', 'competitor', 'fintech-infra', 8.9, 'mid-market', 'bank account connectivity API'],
+  ['co-brex', 'Brex', 'brex.com', 'competitor', 'fintech-infra', 5.2, 'startup', 'corporate cards and spend management'],
 ];
 
 const POSTS = [
@@ -111,7 +134,10 @@ db.prepare(`delete from trends where id like 'seed-%'`).run();
 db.prepare(`delete from posts where id like 'seed-%'`).run();
 db.prepare(`delete from companies where id like 'co-%'`).run();
 
-const insertCompany = db.prepare(`insert into companies (id, name, domain, role) values (?,?,?,?)`);
+const insertCompany = db.prepare(`
+  insert into companies (id, name, domain, role, industry, market_share, size, niche)
+  values (?,?,?,?,?,?,?,?)
+`);
 for (const row of COMPANIES) insertCompany.run(...row);
 
 const insertPost = db.prepare(`

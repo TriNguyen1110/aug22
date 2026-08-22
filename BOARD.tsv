@@ -51,3 +51,7 @@ H+4.3	item	11	done	frontend	SCREEN	all 5 SCREEN checks pass: weblogs clean 6/6 r
 H+4.4	item	13	review	backend	DATA	real queryable trends GET /api/trends?q=; fixed floor-filtering bug (minCount+floorOn+relevanceTo) that hid real single-post matches, committed next
 H+4.6	item	13	done	backend	DATA	verified: q=onboarding matched_posts=1 top trend=onboarding; q=italianbrainrot matched_posts=2 scored independently; q=zzz.. returns empty honest result; global /api/trends unchanged; all findings quotes verbatim grounded; smoke+test:backend+test:journeys clean; strengthened backend.flows.test.mjs onboarding case to assert floor clears and relevanceTo top match
 H+4.6	fact	trends.search.verified	onboarding->1 post/top term onboarding; italianbrainrot->2 posts scored independently; unmatched term->honest empty	verifier	DATA	-
+H+5.0	item	15	doing	backend	DATA	competitor filter/sort + grounded /api/chat with live Bright Data attempt
+H+5.2	item	14	review	frontend	SCREEN	Meridian rebrand + navbar fixed (sr-only visibility, hamburger icon replaced with lucide Menu/X, mobile menu overlay replaced with plain custom dropdown after HeroUI NavbarMenu failed to render), committed next
+H+5.2	item	15	review	backend	DATA	competitor filter/sort + grounded /api/chat with live Bright Data attempt, committed next
+H+5.3	fact	brightdata.live	working via Direct API (Bearer token) with country param required; proxy zone consistently 407s despite correct creds	main	-	swapped src/ingest/reddit.ts from proxy to Direct API, verified 25 real records ingested from r/notion live

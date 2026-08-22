@@ -150,6 +150,68 @@ test('pipeline-health flow: naive fetch is cached for ~60s, second rapid call is
   assert.ok(secondMs < 200, `cached second call should be fast (<200ms), took ${secondMs}ms (first call took ${firstMs}ms)`);
 });
 
+test('competitors flow: industry filter narrows the result set to that industry', async () => {
+  const filtered = await get('/api/competitors?industry=fintech-infra');
+  assert.ok(filtered.companies.length > 0, 'fintech-infra should match at least one seeded company');
+  for (const c of filtered.companies) {
+    assert.equal(c.industry, 'fintech-infra', `company ${c.name} should belong to the filtered industry`);
+  }
+  const unfiltered = await get('/api/competitors');
+  assert.ok(filtered.companies.length < unfiltered.companies.length, 'filtered set must be a proper subset');
+});
+
+test('competitors flow: sort=market_share orders companies by descending market share', async () => {
+  const j = await get('/api/competitors?sort=market_share');
+  const shares = j.companies.map((c) => c.market_share);
+  const sorted = [...shares].sort((a, b) => b - a);
+  assert.deepEqual(shares, sorted, 'companies must be ranked by market_share desc');
+});
+
+test('competitors flow: no params leaves behavior unchanged from before industry/sort existed', async () => {
+  const j = await get('/api/competitors');
+  assert.ok(Array.isArray(j.companies) && j.companies.length > 0);
+  assert.ok(Array.isArray(j.snapshots));
+});
+
+test('chat flow: a question matching real data returns a grounded, verified answer', async () => {
+  const res = await fetch(new URL('/api/chat', BASE), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question: 'What are people saying about onboarding?' }),
+  });
+  assert.equal(res.ok, true, `chat request failed: ${res.status}`);
+  const j = await res.json();
+  assert.ok(typeof j.answer === 'string' && j.answer.length > 0, 'answer must be a non-empty string');
+  assert.ok(Array.isArray(j.citations), 'citations must be an array');
+  assert.ok(j.citations.length > 0, 'a matching question should produce at least one citation');
+
+  const posts = await get('/api/health'); // sanity: DB is reachable for the cross-check below
+  assert.ok(posts.ok);
+  const db = await import('better-sqlite3');
+  const Database = db.default;
+  const conn = new Database(process.env.DB_PATH ?? './data/app.db', { readonly: true });
+  for (const c of j.citations) {
+    const post = conn.prepare('select text from posts where id = ?').get(c.post_id);
+    assert.ok(post, `citation cites a real post_id (${c.post_id})`);
+    assert.ok(post.text.includes(c.quote), `citation quote must be verbatim in post ${c.post_id}`);
+  }
+  conn.close();
+
+  assert.ok(j.brightdata && typeof j.brightdata.attempted === 'boolean', 'brightdata.attempted must be present');
+  assert.ok(typeof j.brightdata.ok === 'boolean', 'brightdata.ok must be present');
+});
+
+test('chat flow: a question with no matching data returns an honest empty answer, no fabrication', async () => {
+  const res = await fetch(new URL('/api/chat', BASE), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question: 'zzz_totally_unrelated_nonexistent_topic_xyz' }),
+  });
+  assert.equal(res.ok, true);
+  const j = await res.json();
+  assert.equal(j.citations.length, 0, 'no matching posts means no citations, not a fabricated one');
+});
+
 test('no main-flow route requires auth, a session, or credentials', async () => {
   for (const path of ['/api/health', '/api/trends', '/api/competitors', '/api/monitoring']) {
     const res = await fetch(new URL(path, BASE));

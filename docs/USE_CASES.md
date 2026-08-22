@@ -12,6 +12,29 @@ mid-build.
   pages. No login walls, no app required to read. Reddit is the primary collector per
   `.claude/INSIGHTS.md`'s verified experiments.
 
+## Platform coverage (why this isn't "a few searches")
+
+Reddit alone is exactly the kind of content a search engine or an LLM prompt can already
+summarize — long-form public text is the least differentiated source available. The actual
+value case is multi-platform breadth: signal a marketer cannot get from a few searches because
+it isn't indexed as text anywhere, or sits behind a platform's own walled app.
+
+- **Reddit** (`src/ingest/reddit.ts`) — all three use cases. Long-form quotable discourse,
+  comments included, community name gives free audience segmentation.
+- **Facebook** (`src/ingest/facebook.ts`) — competitor research primarily: Company Reviews and
+  Group posts are genuinely multi-country and carry structured ratings, not just prose. Can
+  double for monitoring via a brand's own Page posts.
+- **Instagram** (`src/ingest/instagram.ts`) — monitoring primarily: a brand's own posts/Reels
+  and the comments under them, which is the actual "how are people reacting to what we post"
+  signal a search can't reconstruct (Instagram isn't crawled/indexed the way Reddit is).
+
+All three follow the same shape: cache raw payload to `./data/raw/` before parsing, Zod-validate,
+assert `records_extracted > 0` or fail loudly, OTel span per stage. `--cached` works identically
+across all of them. Facebook/Instagram require Bright Data's Direct API (`BRIGHTDATA_API_TOKEN`,
+Bearer auth) since their data comes from Bright Data's structured collector/dataset product, not
+a raw page fetch through the Web Unlocker proxy — the proxy pattern that works for Reddit's
+`.json` endpoints doesn't apply to JS-rendered platforms without their own API.
+
 ## Three pages, one schema
 
 All three use cases write into the same `posts` / `findings` tables, distinguished by

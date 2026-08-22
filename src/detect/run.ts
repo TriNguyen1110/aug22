@@ -1,5 +1,5 @@
 // CLI entry: bun/tsx run of the burst-score detector against the live DB.
-import { migrate } from '../db/migrate.js';
+import { migrate } from '../db/migrate';
 import { runDetect } from './burst.js';
 
 const db = migrate();

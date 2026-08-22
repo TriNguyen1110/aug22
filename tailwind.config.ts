@@ -2,6 +2,7 @@ import type { Config } from 'tailwindcss';
 import { heroui } from '@heroui/react';
 
 const config: Config = {
+  safelist: ['sr-only'],
   content: [
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
