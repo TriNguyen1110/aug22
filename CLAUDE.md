@@ -126,6 +126,11 @@ builder with the fix from `note` and repeat. Never skip straight from a builder'
 "looks done" — that's the exact self-certification the board's role table forbids. This loop
 runs every tick, not just at the end.
 
+**Push rule:** once the verifier marks an item `done`, the main session pushes to `origin` —
+don't let verified work sit local-only. Never push while another agent has uncommitted or
+in-flight changes to files you're about to push alongside; push what's actually complete and
+verified, leave in-flight work uncommitted until its own agent finishes and is verified.
+
 All shared state lives in one append-only, tab-separated file. Never edit a line, never rewrite
 the file, only append with `>>`. Agents run in parallel and a rewrite loses whatever another
 agent appended in between. **The last row for a given `kind` + `id` is the current truth.**
