@@ -1,11 +1,11 @@
 /**
  * Bright Data Reddit ingest. Terminal only, per CLAUDE.md's Scraper Studio section.
  *
- * Subreddit -> source_type / company mapping (docs/USE_CASES.md):
- *   r/Notion, r/SaaS, r/productivity   -> source_type 'trend',      company_id null
- *   r/Linear                           -> source_type 'competitor', company_id co-linear
- *   r/asana                            -> source_type 'competitor', company_id co-asana
- *   r/Notion (Notion-affiliated proxy) -> source_type 'own',        company_id co-notion
+ * Subreddit -> source_type / company mapping (docs/USE_CASES.md, revised 2026-08-22,
+ * demo target pivoted from Notion/Linear/Asana to Anthropic/OpenAI):
+ *   r/singularity     -> source_type 'trend',      company_id null          (general AI/agents discourse)
+ *   r/ChatGPTCoding    -> source_type 'competitor', company_id co-openai     (OpenAI/Codex discourse)
+ *   r/ClaudeAI         -> source_type 'own',        company_id co-anthropic  (Anthropic's own reception)
  *
  * Flow: fetch -> cache raw JSON to ./data/raw/ BEFORE parsing -> validate with Zod ->
  * upsert into posts -> assert records_extracted > 0 or throw. A 200 with 0 records is
@@ -35,11 +35,9 @@ const PLATFORM = 'reddit';
 
 // Subreddit -> row shape mapping, filled in from the Wednesday dry run per CLAUDE.md.
 const SUBREDDIT_MAP: Record<string, { source_type: 'trend' | 'competitor' | 'own'; company_id: string | null }> = {
-  notion: { source_type: 'trend', company_id: null },
-  saas: { source_type: 'trend', company_id: null },
-  productivity: { source_type: 'trend', company_id: null },
-  linear: { source_type: 'competitor', company_id: 'co-linear' },
-  asana: { source_type: 'competitor', company_id: 'co-asana' },
+  singularity: { source_type: 'trend', company_id: null },
+  chatgptcoding: { source_type: 'competitor', company_id: 'co-openai' },
+  claudeai: { source_type: 'own', company_id: 'co-anthropic' },
 };
 const SUBREDDITS = Object.keys(SUBREDDIT_MAP);
 
@@ -212,10 +210,27 @@ function pickSubredditForQuestion(question: string): string {
   for (const subreddit of SUBREDDITS) {
     if (new RegExp(`\\b${subreddit}\\b`).test(lower)) return subreddit;
   }
-  return 'saas';
+  return 'singularity';
 }
 
-export async function attemptTargetedFetch(term: string): Promise<{
+/**
+ * Maps a chat `scope` (CONTRACT.md's 'trends' | 'competitor' | 'own') straight to
+ * the subreddit that already backs that source_type in SUBREDDIT_MAP, so each
+ * scoped chat agent (search_trends / search_competitors / search_own_reception in
+ * src/api/routes.ts) targets its own domain's live feed rather than falling back
+ * to the generic word-match heuristic. Omitted/unknown scope keeps today's
+ * behavior (pickSubredditForQuestion over the term text).
+ */
+const SCOPE_TO_SUBREDDIT: Record<string, string> = {
+  trends: 'singularity',
+  competitor: 'chatgptcoding',
+  own: 'claudeai',
+};
+
+export async function attemptTargetedFetch(
+  term: string,
+  scope?: string,
+): Promise<{
   attempted: boolean;
   ok: boolean;
   records_extracted: number;
@@ -226,7 +241,7 @@ export async function attemptTargetedFetch(term: string): Promise<{
     return { attempted: false, ok: false, records_extracted: 0, error: 'BRIGHTDATA_API_TOKEN not configured' };
   }
 
-  const subreddit = pickSubredditForQuestion(term);
+  const subreddit = (scope && SCOPE_TO_SUBREDDIT[scope]) || pickSubredditForQuestion(term);
   const result = await fetchSubredditViaBrightData(subreddit);
 
   if (result.error || result.records.length === 0) {

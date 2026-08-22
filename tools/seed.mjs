@@ -63,7 +63,9 @@ const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
 // GET /api/competitors?industry=&sort= has more than one industry and more than
 // three rows to actually filter/sort over.
 const COMPANIES = [
-  ['co-notion', 'Notion', 'notion.so', 'target', 'productivity-saas', 18.5, 'mid-market', 'all-in-one docs and wiki'],
+  ['co-anthropic', 'Anthropic', 'anthropic.com', 'target', 'ai-infra', 22.0, 'enterprise', 'AI safety research lab, maker of Claude'],
+  ['co-openai', 'OpenAI', 'openai.com', 'competitor', 'ai-infra', 34.5, 'enterprise', 'AI research and deployment, maker of ChatGPT/Codex'],
+  ['co-notion', 'Notion', 'notion.so', 'competitor', 'productivity-saas', 18.5, 'mid-market', 'all-in-one docs and wiki'],
   ['co-linear', 'Linear', 'linear.app', 'competitor', 'productivity-saas', 9.2, 'startup', 'issue tracking for engineering teams'],
   ['co-asana', 'Asana', 'asana.com', 'competitor', 'productivity-saas', 14.8, 'enterprise', 'work management for cross-functional teams'],
   ['co-clickup', 'ClickUp', 'clickup.com', 'competitor', 'productivity-saas', 11.3, 'mid-market', 'all-in-one project management and docs'],

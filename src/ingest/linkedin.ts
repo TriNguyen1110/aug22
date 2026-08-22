@@ -20,6 +20,10 @@
  * or dropped entirely (monday, plaid) rather than fabricating a snapshot from the
  * wrong company or an empty page.
  *
+ * `anthropicresearch` (Anthropic) and `openai` (OpenAI) verified live 2026-08-22 for
+ * the Anthropic/OpenAI demo pivot -- both 200'd with the correct company's real
+ * "description" field on the first try, no collision or authwall.
+ *
  * Usage:
  *   bun run src/ingest/linkedin.ts             # real fetch, needs BRIGHTDATA_API_TOKEN
  *   bun run src/ingest/linkedin.ts --cached     # replay most recent cached HTML per slug
@@ -38,6 +42,8 @@ const BRIGHTDATA_ZONE = 'web_unlocker1';
 // header). Companies with no confidently-correct slug (Monday, Plaid -- both land on
 // an authwall page with no description field) are omitted rather than guessed.
 const COMPANY_SLUGS: Record<string, string> = {
+  'co-anthropic': 'anthropicresearch',
+  'co-openai': 'openai',
   'co-notion': 'notionhq',
   'co-linear': 'linearapp',
   'co-asana': 'asana',

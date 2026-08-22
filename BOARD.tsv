@@ -99,3 +99,7 @@ H+7.2	item	23	review	backend	DATA	committed 1a0434e: multi-word phrase preferenc
 H+6.6	item	24	review	frontend	SCREEN	typography consistency pass, chat loading UX message, seed/real data divider (SEEDED / DEMO DATA), committed next
 H+7.3	item	23	done	main	DATA	independently re-verified: GET /api/trends top terms are real multi-word phrases (notion calendar, free tier, notion templates), GET /api/trends?q=calendar returns real scoped trends + non-empty grounded related array (tool/tools/app/apps/feature, all real corpus terms), smoke 14/14
 H+7.4	item	24	done	main	SCREEN	independently re-verified: weblogs clean 4/4 main routes, test:frontend clean, chat loading message confirmed visible interactively via playwright (checking/verifying/working text appears during live request), seed/real divider confirmed earlier on trend-notion-calendar detail page
+H+7.5	item	26	doing	backend	DATA	agentic tool-selection for /api/chat search term, replacing extractChatTerm heuristic
+H+7.6	item	25	review	backend	DATA	Anthropic/OpenAI data pivot complete: SUBREDDIT_MAP swapped, companies updated, 113 live records, LinkedIn profiles for both
+H+7.6	item	26	review	backend	DATA	agentic scope-specific chat tools (search_trends/search_competitors/search_own_reception), replacing keyword-regex extraction
+H+7.7	item	27	review	backend	DATA	fix chat retrieval to word-level matching (not whole-phrase substring) + multi-term synonym support via tool schema (model generates its own synonyms per question) + fix same substring-adjacency bug in trend timeline/finding generation

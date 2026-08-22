@@ -331,15 +331,18 @@ function buildTimeline(
   windowStart: string,
   windowEnd: string,
 ): Array<{ date: string; count: number }> {
-  const rows = db
-    .prepare(
-      `select substr(posted_at, 1, 10) as day, count(*) as n
-       from posts
-       where posted_at >= ? and posted_at <= ? and text like '%' || ? || '%' collate nocase
-       group by day`,
-    )
-    .all(windowStart, windowEnd, term) as { day: string; n: number }[];
-  const countsByDay = new Map(rows.map((r) => [r.day, r.n]));
+  // Same fix as getTrendById's finding generator: a strict SQL LIKE '%term%' misses
+  // posts where the n-gram's words are adjacent only after stopword-filtering (see
+  // findVerbatimQuote's comment). Scan window-matching posts app-side instead.
+  const windowPosts = db
+    .prepare(`select posted_at, text from posts where posted_at >= ? and posted_at <= ?`)
+    .all(windowStart, windowEnd) as { posted_at: string; text: string }[];
+  const countsByDay = new Map<string, number>();
+  for (const p of windowPosts) {
+    if (!findVerbatimQuote(term, p.text)) continue;
+    const day = p.posted_at.slice(0, 10);
+    countsByDay.set(day, (countsByDay.get(day) ?? 0) + 1);
+  }
 
   const timeline: Array<{ date: string; count: number }> = [];
   const start = new Date(windowStart.slice(0, 10));
@@ -701,15 +704,25 @@ const GENERIC_TOOL = {
  * gracefully instead of becoming a new single point of failure for the whole
  * chat request.
  */
+/**
+ * Returns { primary, combined }: `primary` is the model's single best term, used to
+ * target the live Bright Data fetch (attemptTargetedFetch needs one subreddit-matching
+ * string). `combined` folds in the model's own synonym/variant list (e.g. "price",
+ * "pricing", "cost") space-joined, so downstream word-level retrieval (searchWords/
+ * scoreRelevance, already word-based) picks up any of them -- this is the "customize
+ * the query, handle synonyms" the tool-use design enables: the agent generates its own
+ * synonyms per question rather than the app maintaining a static synonym dictionary.
+ */
 async function selectSearchTerm(
   question: string,
   scope: string | undefined,
   companyNames: string[],
   span: { setAttr: (k: string, v: unknown) => void },
-): Promise<string> {
+): Promise<{ primary: string; combined: string }> {
   if (!process.env.ANTHROPIC_API_KEY) {
     span.setAttr('term_selection', 'heuristic (no api key)');
-    return extractChatTermHeuristic(question, companyNames);
+    const term = extractChatTermHeuristic(question, companyNames);
+    return { primary: term, combined: term };
   }
   const tool = (scope && SCOPED_TOOLS[scope]) || GENERIC_TOOL;
   span.setAttr('tool_offered', tool.name);
@@ -725,13 +738,16 @@ async function selectSearchTerm(
           input_schema: {
             type: 'object',
             properties: {
-              term: {
-                type: 'string',
+              terms: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 1,
+                maxItems: 5,
                 description:
-                  "The single best search term for finding relevant posts. Retrieval is a literal substring match against raw post text, so STRONGLY prefer a single distinctive word (a company name, product name, or one specific keyword, e.g. \"codex\" or \"notion\") over a multi-word descriptive phrase -- a phrase like \"Notion calendar feature\" will usually match ZERO posts even when many posts discuss that exact topic, because the words rarely appear adjacent in that literal order. Only use two words together if they are a fixed name that is always written together (e.g. \"open ai\").",
+                  "1-5 search terms for finding relevant posts, ordered with the single most distinctive term FIRST (a company/product name or one specific keyword, e.g. \"codex\"). Retrieval matches at the word level (not a literal phrase), so you should include real synonyms and closely related variants as separate array entries to widen recall -- e.g. for a pricing question: [\"codex\", \"price\", \"pricing\", \"cost\"], or for a sentiment question about a feature: [\"onboarding\", \"onboard\", \"setup\", \"getting started\"]. Think about how differently real users might phrase the same idea and include those variants; this is your one chance to expand the query, there is no separate synonym step after this.",
               },
             },
-            required: ['term'],
+            required: ['terms'],
           },
         },
       ],
@@ -742,16 +758,20 @@ async function selectSearchTerm(
     if (!toolUse || toolUse.type !== 'tool_use') {
       throw new Error(`model did not return a ${tool.name} tool_use block`);
     }
-    const input = toolUse.input as { term?: unknown };
-    const term = typeof input.term === 'string' ? input.term.trim() : '';
-    if (!term) throw new Error(`${tool.name} tool_use returned an empty term`);
+    const input = toolUse.input as { terms?: unknown };
+    const terms = Array.isArray(input.terms)
+      ? input.terms.filter((t): t is string => typeof t === 'string' && t.trim().length > 0).map((t) => t.trim())
+      : [];
+    if (terms.length === 0) throw new Error(`${tool.name} tool_use returned no usable terms`);
     span.setAttr('term_selection', 'agentic tool-call');
-    return term;
+    span.setAttr('terms_selected', terms.join(', '));
+    return { primary: terms[0], combined: terms.join(' ') };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     span.setAttr('term_selection_failure_reason', reason);
     span.setAttr('term_selection', 'heuristic (fallback)');
-    return extractChatTermHeuristic(question, companyNames);
+    const term = extractChatTermHeuristic(question, companyNames);
+    return { primary: term, combined: term };
   }
 }
 
@@ -782,18 +802,46 @@ const CHAT_SCOPE_TO_SOURCE_TYPE: Record<string, string> = {
  * a cheap proxy for "this post is centrally about the term" vs. mentioning it once
  * in passing near the end. No new dependency, per CONTRACT.md.
  */
+const CHAT_TERM_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'or', 'of', 'to', 'for', 'in', 'on', 'about', 'what', 'is', 'are']);
+
+// The agentic tool-selection step (selectSearchTerm) can return a natural-language
+// phrase the model paraphrased from the question (e.g. "Asana price increase"), which
+// is often NOT a literal substring of the post that's actually relevant (the real post
+// says "raised prices again", not "price increase"). Score/match at the word level
+// instead of requiring the whole phrase verbatim -- same root fix as findVerbatimQuote's
+// gap tolerance, applied to free-form chat search terms instead of algorithmic n-grams.
+function searchWords(term: string): string[] {
+  return [...new Set(
+    term
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !CHAT_TERM_STOPWORDS.has(w)),
+  )];
+}
+
 function scoreRelevance(text: string, term: string): number {
   const lowerText = text.toLowerCase();
-  const lowerTerm = term.toLowerCase();
-  if (!lowerTerm) return 0;
-  let occurrences = 0;
-  let idx = lowerText.indexOf(lowerTerm);
-  while (idx !== -1) {
-    occurrences += 1;
-    idx = lowerText.indexOf(lowerTerm, idx + lowerTerm.length);
+  const words = searchWords(term);
+  if (words.length === 0) return 0;
+  let score = 0;
+  let matchedWords = 0;
+  for (const w of words) {
+    let occurrences = 0;
+    let idx = lowerText.indexOf(w);
+    while (idx !== -1) {
+      occurrences += 1;
+      idx = lowerText.indexOf(w, idx + w.length);
+    }
+    if (occurrences > 0) matchedWords += 1;
+    score += occurrences;
   }
-  const leadBonus = lowerText.slice(0, 200).includes(lowerTerm) ? 2 : 0;
-  return occurrences + leadBonus;
+  // Posts matching more of the distinct query words rank well ahead of a post that
+  // repeats just one of them -- "covers most of what was asked" beats "says one
+  // word a lot".
+  score += matchedWords * matchedWords * 3;
+  const leadBonus = words.some((w) => lowerText.slice(0, 200).includes(w)) ? 2 : 0;
+  return score + leadBonus;
 }
 
 export async function getChat(db: Database.Database, question: string, scope?: string) {
@@ -802,10 +850,11 @@ export async function getChat(db: Database.Database, question: string, scope?: s
     if (scope) span.setAttr('scope', scope);
 
     const companyNames = (db.prepare(`select name from companies`).all() as { name: string }[]).map((c) => c.name);
-    const term = await selectSearchTerm(question, scope, companyNames, span);
+    const { primary, combined: term } = await selectSearchTerm(question, scope, companyNames, span);
     span.setAttr('extracted_term', term);
+    span.setAttr('primary_term', primary);
 
-    const brightdataResult = await attemptTargetedFetch(term, scope);
+    const brightdataResult = await attemptTargetedFetch(primary, scope);
     span.setAttr('brightdata_attempted', brightdataResult.attempted);
     span.setAttr('brightdata_ok', brightdataResult.ok);
     if (brightdataResult.error) span.setAttr('brightdata_error', brightdataResult.error);
@@ -822,19 +871,25 @@ export async function getChat(db: Database.Database, question: string, scope?: s
       span.setAttr('failure_reason', `unknown scope "${scope}"`);
     }
 
-    // Pre-filter: top 30 by recency (optionally restricted to a source_type via
-    // `scope`), then re-rank that candidate set by real relevance below. Recency
-    // is kept as a cheap pre-filter / natural tiebreak, not the final ranking.
+    // Pre-filter on ANY significant word from `term` (not the whole phrase as a literal
+    // substring -- the model's chosen term is often a paraphrase, e.g. "Asana price
+    // increase" for a post that actually says "raised prices again"), optionally
+    // restricted to a source_type via `scope`. Word-level OR match widens the
+    // candidate pool; scoreRelevance below does the real ranking.
+    const termWords = searchWords(term);
+    const wordClauses = termWords.map(() => `text like '%' || ? || '%' collate nocase`).join(' or ');
     const candidates = (
-      sourceType
-        ? db
-            .prepare(
-              `select * from posts where source_type = ? and text like '%' || ? || '%' collate nocase order by posted_at desc limit 30`,
-            )
-            .all(sourceType, term)
-        : db
-            .prepare(`select * from posts where text like '%' || ? || '%' collate nocase order by posted_at desc limit 30`)
-            .all(term)
+      termWords.length === 0
+        ? []
+        : sourceType
+          ? db
+              .prepare(
+                `select * from posts where source_type = ? and (${wordClauses}) order by posted_at desc limit 60`,
+              )
+              .all(sourceType, ...termWords)
+          : db
+              .prepare(`select * from posts where (${wordClauses}) order by posted_at desc limit 60`)
+              .all(...termWords)
     ) as PostRow[];
 
     const matched = candidates
@@ -848,7 +903,7 @@ export async function getChat(db: Database.Database, question: string, scope?: s
     if (matched.length === 0) {
       span.setAttr('failure_reason', 'zero matched posts, LLM call skipped');
       return {
-        answer: `I don't have data on that yet. No posts in the corpus mention "${term}".`,
+        answer: `I don't have data on that yet. No posts in the corpus mention "${primary}" or its related terms.`,
         citations: [] as ChatCitation[],
         brightdata,
       };

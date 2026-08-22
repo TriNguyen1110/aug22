@@ -132,7 +132,9 @@ test('chat box on /trends submits a question and renders an answer with a citati
   assert.ok((await input.count()) > 0, 'trends page should render a chat input');
   await input.fill('notion');
   await page.locator('main button[type="submit"]', { hasText: 'Ask' }).first().click();
-  await page.waitForSelector('main p:has-text("Checked live data")', { timeout: 20000 });
+  // Live fetch + LLM round trip is documented as 15-60s (see PageChat loading copy); a 20s
+  // timeout here was flaky against real latency, not a product bug. Match the documented ceiling.
+  await page.waitForSelector('main p:has-text("Checked live data")', { timeout: 65000 });
   const text = await page.textContent('main');
   assert.ok(text.includes('Checked live data'), 'chat response should disclose live-data attempt status');
 });
