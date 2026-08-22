@@ -73,6 +73,10 @@ test('pipeline-health flow: reports both naive and brightdata comparison keys', 
   assert.ok(j.brightdata && typeof j.brightdata === 'object', 'brightdata key should be present');
   assert.ok('attempted' in j.brightdata && 'ok' in j.brightdata && 'records_extracted' in j.brightdata);
   assert.ok(j.brightdata.records_extracted > 0, 'brightdata records_extracted should reflect real ingested rows');
+  const health = await get('/api/health');
+  assert.equal(j.brightdata.records_extracted, health.records_extracted, 'brightdata.records_extracted must match /api/health');
+  assert.ok(typeof j.naive.status === 'number' || j.naive.status === null, 'naive.status must be a real HTTP status or null on fetch failure, not hardcoded');
+  assert.ok(typeof j.naive.bytes === 'number', 'naive.bytes must be a real byte count');
 });
 
 test('no main-flow route requires auth, a session, or credentials', async () => {
