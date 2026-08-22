@@ -53,15 +53,13 @@ One line on what you learned. Stop talking.
 
 ### What does your project do?
 
-Meridian is a market-research tool with one rule: every claim traces back to a real
-quote from a real post, never a paraphrase. Three use cases, one pipeline — Trends
-(burst-detection over live discourse, SQL decides what's trending, the LLM just
-explains it), Competitors (pricing, activity, and synthesized sentiment for a named
-competitor, pulled from multiple real sources instead of one flat data point), and
-Monitoring (how our own posts are actually landing). Every page has a chat box, and
-the chat is agentic — the model picks its own search terms and synonyms through a
-tool call, and can kick off a live Bright Data fetch, instead of us guessing what
-to search for.
+Ask ChatGPT what people think of your product and it'll confidently make something
+up. Meridian won't — every claim it makes has to point back to a real quote from a
+real post, or it doesn't get said. We built it to research Claude itself: what's
+trending in AI right now, how Claude stacks up against OpenAI, how people actually
+feel about what we ship. Ask it a question and it doesn't just search — it decides
+what to search for, picks its own synonyms, pulls fresh data from Reddit live, and
+answers with receipts.
 
 ### What problem does it solve, and who's it for?
 
