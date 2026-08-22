@@ -4,13 +4,19 @@ Docs folder is the brief agents read before touching code. Schema and API are fr
 `../CONTRACT.md`. This file is the "why" and the concrete demo target — it does not change
 mid-build.
 
-## Demo target
+## Demo target (revised 2026-08-22, was Notion/Linear/Asana)
 
-- **Target company:** Notion
-- **Competitors:** Linear, Asana
-- **Why these:** all three have active subreddits, public changelogs/blogs, and public pricing
-  pages. No login walls, no app required to read. Reddit is the primary collector per
-  `.claude/INSIGHTS.md`'s verified experiments.
+- **Target company:** Anthropic (Claude)
+- **Competitor:** OpenAI (ChatGPT/Codex)
+- **Why the switch:** self-referential demo — a Claude marketing/product team researching its
+  own reception, a real competitor, and the broader AI/agents discourse. Also strictly easier
+  to demo: r/ClaudeAI, r/ChatGPTCoding, and r/singularity were already verified live via Bright
+  Data's Direct API this session (real payloads, 150-180KB each), so there is zero new platform
+  risk in the switch — same Reddit ingest path, different subreddit map. r/OpenAI and
+  r/artificial were tried and returned empty/timed out; not used.
+- Linear/Asana/co-google remain in the `companies` table as illustrative-only rows (seeded, not
+  scraped) so `/competitors`' industry filter/sort still has more than two rows to demonstrate
+  against — but they are not part of the live-data demo narrative anymore.
 
 ## Platform coverage (why this isn't "a few searches")
 
@@ -43,24 +49,24 @@ one-day-build shortcut.
 
 ### 1. `/trends` — trend & insight research
 
-Public discourse a simple search can't surface: burst detection on r/Notion, r/SaaS,
-r/productivity, r/Linear, r/asana. `source_type = 'trend'`. Same burst-score SQL as the
-original design (recent-window count / prior-window count, floored on absolute count).
-No model decides what's trending — SQL does, the LLM only names and explains the term.
+Public discourse a simple search can't surface: burst detection on r/singularity (general
+AI/agents/tech trend discourse — "AI slop", agentic coding, model releases, etc.).
+`source_type = 'trend'`, `company_id = null`. Same burst-score SQL as the original design
+(recent-window count / prior-window count, floored on absolute count). No model decides
+what's trending — SQL does, the LLM only names and explains the term.
 
 ### 2. `/competitors` — competitor research
 
-Prices, changelog entries, and public activity for Linear and Asana, scraped from their
-pricing pages, changelog/blog RSS, and their subreddits. `source_type = 'competitor'`,
-rows keyed to a `companies` row with `role = 'competitor'`. Structured facts (a price, a
-changelog line) land in `competitor_snapshots`; discourse about them lands in `posts` like
-everything else.
+Real discourse about OpenAI (Codex/ChatGPT) from r/ChatGPTCoding — literally a subreddit where
+people directly compare Claude Code and Codex, ideal competitor signal. `source_type =
+'competitor'`, rows keyed to `companies.id = 'co-openai'`, `role = 'competitor'`. Structured
+facts (LinkedIn company overview, pricing where public) land in `competitor_snapshots`;
+discourse lands in `posts` like everything else.
 
 ### 3. `/monitoring` — own-company monitoring
 
-Notion's own blog/changelog and its official social presence (r/Notion posts from
-Notion-affiliated accounts, or just the subreddit as a proxy for "how people are reacting to
-Notion's own posts"). `source_type = 'own'`, `companies.role = 'target'`.
+Anthropic's own reception: r/ClaudeAI posts and reactions. `source_type = 'own'`,
+`companies.id = 'co-anthropic'`, `role = 'target'`.
 
 ## Grounding rule (unchanged)
 

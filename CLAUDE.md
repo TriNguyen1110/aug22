@@ -94,19 +94,25 @@ Scraper settings live in this file so they are reused automatically:
 collector_id:        reddit_posts   # Bright Data's built-in Reddit collector, verify at first run
 date_range_param:    time_filter    # 'week' for trend windows, 'month' for competitor/monitoring
 records_per_call:    100
-auth_method:         BRIGHTDATA_API_TOKEN bearer, no cookie needed for the public collector
+auth_method:         BRIGHTDATA_API_TOKEN bearer via Direct API (api.brightdata.com/request,
+                      zone=web_unlocker1), NOT the proxy zone -- the proxy 407'd even with
+                      correct, active-account credentials. `country: "us"` is a REQUIRED body
+                      param: omitting it gets a 200 with an empty body from Reddit, which reads
+                      exactly like a block but is actually a missing param.
 retry_policy:        1 retry, then treat as a scrape-doctor case, never loop unbounded
 auto_repair_trigger: records_extracted == 0 on a 200 response, or a required field comes back null
-                      across the whole batch (selector/shape drift)
+                      across the whole batch (selector/shape drift). See `docs/AUTO_REPAIR.md`
+                      for the real, re-runnable `--simulate-break`/`--repair` drill.
 ```
 
-Demo targets (see `docs/USE_CASES.md`), one subreddit per row is the collector's `subreddit` param:
+Demo targets (see `docs/USE_CASES.md`), one subreddit per row is the collector's `subreddit` param.
+Revised 2026-08-22 to the Anthropic/Claude ecosystem (was Notion/Linear/Asana) -- self-referential
+and already verified live this session, see `docs/USE_CASES.md`'s "Demo target" section:
 
 ```
-trends       r/SaaS, r/productivity, r/Notion     source_type=trend,      company_id=null
-competitor   r/linear                             source_type=competitor, company=Linear
-competitor   r/asana                               source_type=competitor, company=Asana
-own          r/Notion                              source_type=own,        company=Notion
+trends       r/singularity      source_type=trend,      company_id=null
+competitor   r/ChatGPTCoding    source_type=competitor, company=OpenAI (co-openai)
+own          r/ClaudeAI         source_type=own,        company=Anthropic (co-anthropic)
 ```
 
 Competitor pricing/changelog snapshots are a plain fetch of the public pricing/changelog page
