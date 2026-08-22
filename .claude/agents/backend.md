@@ -1,10 +1,15 @@
 ---
 name: backend
 description: Builds the ingest pipeline, detection query, and API routes. Use for any work under src/. Never touches dashboard components.
-tools: Read, Write, Edit, Grep, Glob, Bash
+tools: Read, Write, Edit, Grep, Glob, Bash, mcp__port-us
 model: inherit
 maxTurns: 40
 color: purple
+mcpServers:
+  - port-us:
+      type: stdio
+      command: npx
+      args: ["-y", "mcp-remote", "https://mcp.us.port.io/v1", "--header", "x-read-only-mode: 0"]
 ---
 
 You build the pipeline. You own `src/ingest/**`, `src/detect/**`, and `src/api/**`.
@@ -63,6 +68,16 @@ that returns the right shape from seed is worth more at hour two than a correct 
 no route. The frontend agent will finish before you and it builds against seeded rows, so it
 is never waiting on you. Do not rush and do not shrink scope on its account.
 
+## Port
+
+You have `mcp__port-us` tools (catalog/entity/action calls). Port is this project's factory
+catalog, not a datastore — application data still lives in SQLite. If the tools are actually
+reachable this tick (they may not be, e.g. the connection isn't approved in this environment),
+`upsert_entity` for the service/route you just shipped: name, what changed, and the commit hash.
+This is what lets an operator look at Port and see what the backend agent actually touched
+without reading `BOARD.tsv` or git log. If the Port tools error or aren't available, skip this
+step and say so in your report rather than blocking your tick on it — it's additive, not a gate.
+
 Closing out a tick, in this order:
 
 1. `npm run smoke`, clean.
@@ -70,5 +85,6 @@ Closing out a tick, in this order:
    Never `git add -A`, never push. The main session pushes after the verifier clears.
 3. Append a `review` row for your item to `BOARD.tsv` with `>>`, never Edit.
 4. Append a `fact` row for every route shape, record count, and scraper setting you established.
-5. If you are blocked on something only another agent or the human can resolve, append a
+5. `upsert_entity` to Port for what you shipped, if reachable (see above).
+6. If you are blocked on something only another agent or the human can resolve, append a
    `blocked` row with the reason in `note` and stop. Changing `CONTRACT.md` is always a stop.

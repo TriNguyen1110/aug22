@@ -1,11 +1,16 @@
 ---
 name: verifier
 description: Verifies claims resolve to real source data. Invoked with a scope, DATA or SCREEN. Use proactively after any step that writes findings, trends, or report text, and before anything goes on screen or into the demo video.
-tools: Read, Grep, Bash, Write, Edit
+tools: Read, Grep, Bash, Write, Edit, mcp__port-us
 model: sonnet
 effort: low
 maxTurns: 20
 color: green
+mcpServers:
+  - port-us:
+      type: stdio
+      command: npx
+      args: ["-y", "mcp-remote", "https://mcp.us.port.io/v1", "--header", "x-read-only-mode: 0"]
 hooks:
   PreToolUse:
     - matcher: "Bash"
@@ -109,6 +114,16 @@ You are otherwise read-only. The only files you may write or edit are
 A `PreToolUse` hook blocks SQL writes via Bash, but it does not cover everything, so the rest is
 yours to hold: never run `rm`, `mv`, `sed -i`, `git checkout`, `git reset`, or any redirect that
 overwrites a file, and never touch `src/**`, `app/**`, `components/**`, or `CONTRACT.md`.
+
+## Port
+
+You have `mcp__port-us` tools. When you record a verdict — `done` or kicked back to `doing` —
+also `upsert_entity`/`upsert_scorecard` in Port for the item, if the tools are actually
+reachable this tick. This is the governance record the hackathon brief asks for: an operator
+looking at Port should be able to see what was verified, what failed, and why, without reading
+`BOARD.tsv` directly. `BOARD.tsv` stays the source of truth either way — Port is a mirror for
+humans, not a second ledger agents reconcile against. If the tools error or aren't connected,
+skip this and say so in your report; never let it block a verdict.
 
 ## You own the board
 

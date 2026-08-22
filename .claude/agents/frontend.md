@@ -1,7 +1,7 @@
 ---
 name: frontend
 description: Builds dashboard pages and components against seeded data. Use for any work under app/ or components/. Never touches ingest or scraper code.
-tools: Read, Write, Edit, Grep, Glob, Bash, mcp__playwright
+tools: Read, Write, Edit, Grep, Glob, Bash, mcp__playwright, mcp__port-us
 model: sonnet
 maxTurns: 25
 color: blue
@@ -10,6 +10,10 @@ mcpServers:
       type: stdio
       command: npx
       args: ["-y", "@playwright/mcp@latest"]
+  - port-us:
+      type: stdio
+      command: npx
+      args: ["-y", "mcp-remote", "https://mcp.us.port.io/v1", "--header", "x-read-only-mode: 0"]
 ---
 
 You build the dashboard. You own `app/**` and `components/**` and nothing else.
@@ -64,6 +68,13 @@ verifier and you will get a verdict about the previous state.
 You will usually finish before the backend agent. That is expected, and it is why you build
 against seeded rows. Never wait on the backend.
 
+## Port
+
+You have `mcp__port-us` tools alongside playwright. If reachable this tick, `upsert_entity` for
+the page/component you just shipped so the Port catalog reflects what actually changed, same as
+the backend agent does for its own surface. If the tools error or aren't connected, skip it and
+say so in your report — additive, not a gate on your tick.
+
 Closing out a tick, in this order:
 
 1. `npm run weblogs`, clean.
@@ -71,7 +82,8 @@ Closing out a tick, in this order:
    Never `git add -A`, never push. The main session pushes after a clear verdict.
 3. Append a `review` row for your item to `BOARD.tsv` with `>>`, never Edit.
 4. Append a `fact` row for anything you learned that another agent would otherwise recompute.
-5. If you are blocked on something only another agent or the human can resolve, append a
+5. `upsert_entity` to Port for what you shipped, if reachable (see above).
+6. If you are blocked on something only another agent or the human can resolve, append a
    `blocked` row with the reason in `note` and stop. Do not work around a frozen contract.
 
 If a tick runs long, ship what compiles and commit it. A half-finished component that renders

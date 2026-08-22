@@ -205,6 +205,17 @@ decide what is trending.
 
 Run the `verifier` agent before anything goes on screen or into the video.
 
+## Port
+
+Connected via MCP (`.mcp.json`, `port-us`, region US). Port is the factory's catalog and
+governance layer, not a datastore — application data lives in SQLite regardless of what Port
+knows. All three build agents (backend, frontend, verifier) carry `mcp__port-us` in their tool
+list and are instructed to `upsert_entity` for what they shipped, and `verifier` additionally
+records each verdict there. This is additive: if the connection isn't reachable in a given
+environment, agents skip the Port call and say so rather than blocking their tick on it.
+`BOARD.tsv` remains the actual source of truth for build state — Port is where a human operator
+looks to see the same story without reading the board directly.
+
 ## Observability
 
 Every stage gets a span: ingest, parse, detect, enrich, API request. Record duration,
