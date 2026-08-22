@@ -1,0 +1,19 @@
+{
+  "name": "hacker-kit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "seed": "node tools/seed.mjs",
+    "seed:bad": "node tools/seed.mjs --with-bad",
+    "smoke": "node tools/smoke.mjs",
+    "smoke:db": "node tools/smoke.mjs --skip-api",
+    "cite": "node tools/cite-check.mjs",
+    "cite:urls": "node tools/cite-check.mjs --urls",
+    "shot": "node tools/screenshot.mjs",
+    "weblogs": "node tools/weblogs.mjs"
+  },
+  "devDependencies": {
+    "pg": "^8.13.1",
+    "playwright": "^1.49.0"
+  }
+}
