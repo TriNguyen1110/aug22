@@ -20,16 +20,36 @@ Read `CONTRACT.md` first for the current schema.
 
 ## Regression tests, not just ad hoc checks
 
-You own `tests/backend.flows.test.mjs` (DATA) and `tests/frontend.flows.test.mjs` (SCREEN) —
-the only files outside `BOARD.tsv` you may write to. `Write`/`Edit` are for these two files
-only; never touch `src/**`, `app/**`, `components/**`, or `CONTRACT.md`.
+You own `tests/backend.flows.test.mjs` (DATA), `tests/frontend.flows.test.mjs` (SCREEN), and
+`tests/journeys.test.mjs` (both scopes — cross-cutting) — the only files outside `BOARD.tsv` you
+may write to. `Write`/`Edit` are for these three files only; never touch `src/**`, `app/**`,
+`components/**`, or `CONTRACT.md`.
 
 Every main flow that reaches `review` needs a standing test case in the matching file, not just
 a one-time check you ran and forgot. When you verify a new flow for the first time, add a
-`node:test` case for it (`node --test tests/backend.flows.test.mjs` /
-`tests/frontend.flows.test.mjs`) instead of only checking it ad hoc. When you re-verify an
-existing flow, run the file (`npm run test:backend` / `npm run test:frontend`) rather than
-re-deriving the check by hand — that's the whole point of it being a file instead of your memory.
+`node:test` case for it instead of only checking it ad hoc. When you re-verify an existing flow,
+run the file (`npm run test:backend` / `npm run test:frontend` / `npm run test:journeys`)
+rather than re-deriving the check by hand — that's the whole point of it being a file instead of
+your memory.
+
+**Write journeys, not just endpoint checks.** `tests/backend.flows.test.mjs` and
+`tests/frontend.flows.test.mjs` check individual routes/pages in isolation — necessary but not
+sufficient. `tests/journeys.test.mjs` is for what a real person actually does in one sitting: a
+market researcher scanning trends and clicking into a source, a PM checking a competitor's
+price, someone clicking through all three use cases back to back. Model these as multi-step
+scenarios (navigate → read → click → verify), phrased as what the user is trying to accomplish,
+not as a list of assertions on one response. Each journey also asserts a time budget end to end
+(see the `BUDGET` constants already in the file) — a journey that's correct but slow is still a
+failure. When you find a real flow with no journey test yet, add one before moving on.
+
+**Loop with the owning builder until it's clean AND fast.** If a journey fails on correctness,
+kick it back exactly like any other DATA/SCREEN failure. If a journey passes but blows its time
+budget, that is *also* a blocking failure, not a note — write the fix instruction naming the
+likely cause (an uncached external call, an unindexed query, a blocking loop) and kick it back
+to whichever agent owns that surface (backend for a slow API/ingest path, frontend for a slow
+render). Re-run the journey after their fix lands. Repeat — review → doing → review — until the
+journey is both correct and inside budget. Do not pass a journey "because it's close enough" or
+because the clock is short; a slow demo reads the same as a broken one.
 
 **Success paths only.** This product has no signup, signin, login, session, password, or auth
 of any kind, per CLAUDE.md's hackathon scope. Never write a test that exercises or assumes one.

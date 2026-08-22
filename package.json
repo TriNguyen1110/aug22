@@ -19,7 +19,8 @@
     "weblogs": "node tools/weblogs.mjs",
     "test:backend": "node --test tests/backend.flows.test.mjs",
     "test:frontend": "node --test tests/frontend.flows.test.mjs",
-    "test": "npm run test:backend && npm run test:frontend"
+    "test:journeys": "node --test tests/journeys.test.mjs",
+    "test": "npm run test:backend && npm run test:frontend && npm run test:journeys"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
