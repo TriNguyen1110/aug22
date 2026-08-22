@@ -79,6 +79,19 @@ test('pipeline-health flow: reports both naive and brightdata comparison keys', 
   assert.ok(typeof j.naive.bytes === 'number', 'naive.bytes must be a real byte count');
 });
 
+test('pipeline-health flow: naive fetch is cached for ~60s, second rapid call is fast and consistent', async () => {
+  const t0 = Date.now();
+  const first = await get('/api/pipeline-health');
+  const firstMs = Date.now() - t0;
+
+  const t1 = Date.now();
+  const second = await get('/api/pipeline-health');
+  const secondMs = Date.now() - t1;
+
+  assert.deepEqual(second.naive, first.naive, 'second call within the TTL window must return the identical cached naive object');
+  assert.ok(secondMs < 200, `cached second call should be fast (<200ms), took ${secondMs}ms (first call took ${firstMs}ms)`);
+});
+
 test('no main-flow route requires auth, a session, or credentials', async () => {
   for (const path of ['/api/health', '/api/trends', '/api/competitors', '/api/monitoring']) {
     const res = await fetch(new URL(path, BASE));

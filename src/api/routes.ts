@@ -72,43 +72,63 @@ export async function getCompetitorById(db: Database.Database, id: string) {
   });
 }
 
+const NAIVE_CACHE_TTL_MS = 60_000;
+let naiveCache: { at: number; value: Record<string, unknown> } | null = null;
+
+async function fetchNaiveUncached(span: { setAttr: (k: string, v: unknown) => void }): Promise<Record<string, unknown>> {
+  const naiveUrl = 'https://www.reddit.com/r/notion.json';
+  try {
+    const res = await fetch(naiveUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; trendwatch-demo/1.0)' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const bodyText = await res.text();
+    const bytes = Buffer.byteLength(bodyText, 'utf-8');
+    let records_found = 0;
+    let note: string;
+    try {
+      const parsed = JSON.parse(bodyText);
+      records_found = Array.isArray(parsed?.data?.children) ? parsed.data.children.length : 0;
+      note = records_found > 0
+        ? `HTTP ${res.status}, parsed JSON with ${records_found} post(s) in data.children`
+        : `HTTP ${res.status}, JSON parsed but data.children is empty or missing (silent-zero-records failure mode)`;
+    } catch {
+      note = `HTTP ${res.status}, response was not valid JSON (likely a block page or JS shell), ${bytes} bytes`;
+    }
+    return { url: naiveUrl, status: res.status, bytes, records_found, note };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    span.setAttr('naive_failure_reason', reason);
+    return { url: naiveUrl, status: null, bytes: 0, records_found: 0, note: `fetch failed: ${reason}` };
+  }
+}
+
+async function getNaive(span: { setAttr: (k: string, v: unknown) => void }): Promise<Record<string, unknown>> {
+  const now = Date.now();
+  if (naiveCache && now - naiveCache.at < NAIVE_CACHE_TTL_MS) {
+    span.setAttr('naive_cache_hit', true);
+    return naiveCache.value;
+  }
+  span.setAttr('naive_cache_hit', false);
+  const value = await fetchNaiveUncached(span);
+  naiveCache = { at: now, value };
+  return value;
+}
+
 /**
  * Demo endpoint for item 08 (BOARD.tsv): shows the "naive fetch vs Bright Data" gap
  * live, in the UI, with real numbers rather than a slide. `naive` runs a plain
- * unproxied fetch against Reddit's public JSON listing on every request -- cheap,
- * no auth, and it either gets rate-limited/blocked or returns a real page, and we
- * report whichever actually happens rather than assuming. `brightdata` reports the
- * last real ingest's numbers (from the DB, same source as /api/health) plus whether
- * a cached raw payload from today exists, without re-running the pipeline.
+ * unproxied fetch against Reddit's public JSON listing, cached in-memory for
+ * NAIVE_CACHE_TTL_MS (~60s) so repeat requests during a demo window are instant and
+ * not at the mercy of network flakiness -- it either gets rate-limited/blocked or
+ * returns a real page, and we report whichever actually happens rather than assuming.
+ * `brightdata` reports the last real ingest's numbers (from the DB, same source as
+ * /api/health) plus whether a cached raw payload from today exists, without
+ * re-running the pipeline.
  */
 export async function getPipelineHealth(db: Database.Database) {
   return withSpan('api.pipeline-health', async (span) => {
-    const naiveUrl = 'https://www.reddit.com/r/notion.json';
-    let naive: Record<string, unknown>;
-    try {
-      const res = await fetch(naiveUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; trendwatch-demo/1.0)' },
-        signal: AbortSignal.timeout(10_000),
-      });
-      const bodyText = await res.text();
-      const bytes = Buffer.byteLength(bodyText, 'utf-8');
-      let records_found = 0;
-      let note: string;
-      try {
-        const parsed = JSON.parse(bodyText);
-        records_found = Array.isArray(parsed?.data?.children) ? parsed.data.children.length : 0;
-        note = records_found > 0
-          ? `HTTP ${res.status}, parsed JSON with ${records_found} post(s) in data.children`
-          : `HTTP ${res.status}, JSON parsed but data.children is empty or missing (silent-zero-records failure mode)`;
-      } catch {
-        note = `HTTP ${res.status}, response was not valid JSON (likely a block page or JS shell), ${bytes} bytes`;
-      }
-      naive = { url: naiveUrl, status: res.status, bytes, records_found, note };
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      naive = { url: naiveUrl, status: null, bytes: 0, records_found: 0, note: `fetch failed: ${reason}` };
-      span.setAttr('naive_failure_reason', reason);
-    }
+    const naive = await getNaive(span);
 
     const { n: records_extracted } = db.prepare('select count(*) as n from posts').get() as { n: number };
     const last = db.prepare('select max(fetched_at) as t from posts').get() as { t: string | null };
