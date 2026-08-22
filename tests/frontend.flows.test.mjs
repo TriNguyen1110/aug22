@@ -34,6 +34,14 @@ test('home page links to all three use cases with no login gate', async () => {
   assert.equal(await page.locator('a[href="/monitoring"]').count() > 0, true);
 });
 
+test('home page shows naive fetch vs Bright Data pipeline health with real figures', async () => {
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  const text = await page.textContent('body');
+  assert.ok(text.includes('Naive fetch'), 'home page should show a naive fetch figure');
+  assert.ok(text.includes('Bright Data'), 'home page should show a Bright Data figure');
+  assert.ok(text.includes('Records extracted'), 'home page should show records_extracted from pipeline-health');
+});
+
 test('trends flow: list renders ranked rows and links into detail', async () => {
   await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' });
   const rows = page.locator('table tbody tr');
