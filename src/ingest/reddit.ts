@@ -7,6 +7,19 @@
  *   r/ChatGPTCoding    -> source_type 'competitor', company_id co-openai     (OpenAI/Codex discourse)
  *   r/ClaudeAI         -> source_type 'own',        company_id co-anthropic  (Anthropic's own reception)
  *
+ * Broader-competitor expansion (2026-08-22, same session): real major Anthropic
+ * competitors beyond OpenAI, each verified live against the Bright Data Direct API
+ * before being added, not assumed:
+ *   r/Bard             -> source_type 'competitor', company_id co-google     (Google Gemini discourse -- despite the
+ *                                                                              subreddit's old name, active real-time
+ *                                                                              posts are about Gemini)
+ *   r/LocalLLaMA       -> source_type 'competitor', company_id co-meta       (heavy real Meta Llama model discourse)
+ *   r/grok             -> source_type 'competitor', company_id co-xai       (xAI Grok discourse)
+ * r/GoogleGeminiAI was also tried and returned HTTP 200 with an empty body on two
+ * separate live attempts (same silent-empty-body failure mode documented below for
+ * r/OpenAI/r/artificial) and was NOT added -- r/Bard covers real live Gemini
+ * discourse instead.
+ *
  * Flow: fetch -> cache raw JSON to ./data/raw/ BEFORE parsing -> validate with Zod ->
  * upsert into posts -> assert records_extracted > 0 or throw. A 200 with 0 records is
  * a failure, not a success (docs/USE_CASES.md, CLAUDE.md Bright Data section).
@@ -38,6 +51,9 @@ const SUBREDDIT_MAP: Record<string, { source_type: 'trend' | 'competitor' | 'own
   singularity: { source_type: 'trend', company_id: null },
   chatgptcoding: { source_type: 'competitor', company_id: 'co-openai' },
   claudeai: { source_type: 'own', company_id: 'co-anthropic' },
+  bard: { source_type: 'competitor', company_id: 'co-google' },
+  localllama: { source_type: 'competitor', company_id: 'co-meta' },
+  grok: { source_type: 'competitor', company_id: 'co-xai' },
 };
 const SUBREDDITS = Object.keys(SUBREDDIT_MAP);
 
@@ -152,7 +168,11 @@ async function fetchSubredditViaBrightData(subreddit: string): Promise<{ records
       const d = c?.data ?? {};
       return {
         id: d.id ? `t3_${d.id}` : d.name,
-        url: d.url ?? (d.permalink ? `https://www.reddit.com${d.permalink}` : undefined),
+        // Prefer the real Reddit thread page (permalink) over `d.url`, which for
+        // image/link posts is the raw external media URL (e.g. i.redd.it/*.png) --
+        // a citation should take a reader to the actual discussion, not a bare image
+        // with no context. Fall back to `d.url` only if there's genuinely no permalink.
+        url: d.permalink ? `https://www.reddit.com${d.permalink}` : d.url,
         user_posted: d.author,
         title: d.title,
         description: d.selftext,

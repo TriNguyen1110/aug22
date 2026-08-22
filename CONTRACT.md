@@ -128,7 +128,37 @@ GET /api/competitors?q=<term>      -> { query, matched_companies, companies: Com
                                        say so, empty arrays, never fabricate a result. Composes
                                        with industry/sort (all three are independent optional
                                        params, industry/sort still apply to the q-filtered set).
-GET /api/competitors/:id           -> { company, snapshots, findings, posts }
+GET /api/competitors/:id           -> { company, snapshots, findings, posts, insight }
+                                       APPROVED EXTENSION (2026-08-22, backend agent,
+                                       item 28): `findings` for a company with real
+                                       posts but zero pre-authored findings is now
+                                       generated on the fly (src/api/routes.ts's
+                                       generateCompetitorFindings), same construction
+                                       and grounding rule as GET /api/trends/:id's
+                                       fallback -- burst-scored terms over just this
+                                       company's own posts, quote always a verbatim
+                                       substring via findVerbatimQuote, never
+                                       fabricated. `insight` (CompetitorInsight |
+                                       null) is a synthesized combined brief built
+                                       from every real source already known about the
+                                       company -- its LinkedIn profile/update
+                                       `competitor_snapshots` rows plus real Reddit
+                                       discourse posts/findings -- via ONE Anthropic
+                                       call constrained to ONLY that material
+                                       (src/api/routes.ts's getCompetitorInsight):
+                                       { summary: string, sentiment: string,
+                                       pros: string[], cons: string[],
+                                       sources: Array<{ id, kind, url }> }. Every
+                                       pros/cons/summary claim must cite a source_id
+                                       from the real material supplied; a claim citing
+                                       an id that isn't one of the real sources given
+                                       is dropped server-side, never silently kept
+                                       (same defense-in-depth as /api/chat's citation
+                                       re-verification). Additive/optional only:
+                                       missing ANTHROPIC_API_KEY, zero source
+                                       material, an LLM error, or nothing surviving
+                                       verification all resolve to `insight: null`
+                                       and never block the rest of this response.
 GET /api/monitoring                -> { posts: Post[], findings: Finding[] }   source_type='own'
 POST /api/chat
   body: { question: string, scope?: 'trends' | 'competitor' | 'own' }

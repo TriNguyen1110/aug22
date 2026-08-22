@@ -24,6 +24,24 @@
  * the Anthropic/OpenAI demo pivot -- both 200'd with the correct company's real
  * "description" field on the first try, no collision or authwall.
  *
+ * `google` (Gemini), `meta` (Llama), `xai` (Grok) verified live 2026-08-22 for the
+ * broader-competitor expansion -- all three 200'd with the correct company's real
+ * "description" field on the first try.
+ *
+ * Updates/posts (2026-08-22, same expansion): the LinkedIn company overview page's
+ * "Updates" feed is NOT embedded server-side in the initial HTML -- it's lazy-loaded
+ * from a separate guest-view endpoint, `/organization-guest/api/feedUpdates/<numeric
+ * id>?paginationToken=<token>`, whose exact URL (including the company's real numeric
+ * id and a session pagination token) is only discoverable by first fetching the
+ * overview page and reading the `feedUpdatesBaseUrl` <code> element embedded in it --
+ * it is NOT a guessable/static URL per company. That second endpoint IS scrapable
+ * through the same Bright Data Direct API call and returns real server-rendered post
+ * cards (commentary text + a real `/posts/<slug>-activity-<id>-...` permalink per
+ * post). The separate `/company/<slug>/posts/` guest page (as opposed to this feed
+ * API) is confirmed Forbidden for both `openai` and `anthropicresearch` -- verified
+ * live, not assumed from one earlier attempt -- so `/posts/` itself stays unused;
+ * `fetchRecentUpdates` below is the real path in.
+ *
  * Usage:
  *   bun run src/ingest/linkedin.ts             # real fetch, needs BRIGHTDATA_API_TOKEN
  *   bun run src/ingest/linkedin.ts --cached     # replay most recent cached HTML per slug
@@ -44,6 +62,9 @@ const BRIGHTDATA_ZONE = 'web_unlocker1';
 const COMPANY_SLUGS: Record<string, string> = {
   'co-anthropic': 'anthropicresearch',
   'co-openai': 'openai',
+  'co-google': 'google',
+  'co-meta': 'meta',
+  'co-xai': 'xai',
   'co-notion': 'notionhq',
   'co-linear': 'linearapp',
   'co-asana': 'asana',
@@ -87,14 +108,16 @@ function extractDescription(html: string): string | null {
 }
 
 /**
- * Fetches one company's LinkedIn overview page through Bright Data's Direct API.
- * `country: 'us'` is required -- omitting it gets a 200 with an empty body from
- * Bright Data's default exit-node selection, same failure mode documented in
- * src/ingest/reddit.ts.
+ * Fetches one company's LinkedIn overview page (or, when `overrideUrl` is given, an
+ * arbitrary other LinkedIn guest-view URL -- shared here so fetchRecentUpdates below
+ * reuses the exact same Bright Data Direct API call rather than a second copy of it)
+ * through Bright Data's Direct API. `country: 'us'` is required -- omitting it gets a
+ * 200 with an empty body from Bright Data's default exit-node selection, same failure
+ * mode documented in src/ingest/reddit.ts.
  */
-async function fetchOverviewViaBrightData(slug: string): Promise<{ html: string | null; error?: string }> {
+async function fetchOverviewViaBrightData(slug: string, overrideUrl?: string): Promise<{ html: string | null; error?: string }> {
   const token = process.env.BRIGHTDATA_API_TOKEN;
-  const url = `https://www.linkedin.com/company/${slug}`;
+  const url = overrideUrl ?? `https://www.linkedin.com/company/${slug}`;
   try {
     const res = await fetch('https://api.brightdata.com/request', {
       method: 'POST',
@@ -117,14 +140,133 @@ async function fetchOverviewViaBrightData(slug: string): Promise<{ html: string 
   }
 }
 
-function loadCachedHtml(slug: string): string | null {
+function loadCachedHtml(slug: string, tag = ''): string | null {
   mkdirSync(RAW_DIR, { recursive: true });
+  const prefix = `${PLATFORM}-${slug}${tag}-`;
   const files = readdirSync(RAW_DIR)
-    .filter((f) => f.startsWith(`${PLATFORM}-${slug}-`) && f.endsWith('.html'))
+    .filter((f) => f.startsWith(prefix) && f.endsWith('.html'))
     .sort()
     .reverse();
   if (files.length === 0) return null;
   return readFileSync(join(RAW_DIR, files[0]), 'utf-8');
+}
+
+/**
+ * Extracts the real `feedUpdatesBaseUrl` (a relative path like
+ * `/organization-guest/api/feedUpdates/<id>?paginationToken=<token>`) that the
+ * overview page's own lazy-loading JS uses to fetch the Updates feed. This value is
+ * per-company (numeric org id) and session-scoped (pagination token) -- there is no
+ * static/guessable URL, it must be read out of a real fetched overview page.
+ */
+function extractFeedUpdatesBaseUrl(html: string): string | null {
+  const m = html.match(/feedUpdatesBaseUrl" style="display: none"><!--"([^"]+)"-->/);
+  return m ? m[1] : null;
+}
+
+const MAX_UPDATES_PER_COMPANY = 5;
+
+/**
+ * Parses real post cards out of the feedUpdates guest-view HTML. Splits on each
+ * `<li class="mb-1">` card wrapper (the actual per-post DOM boundary, verified
+ * against a live fetch) rather than a naive global regex scan, then within each
+ * card independently extracts the real permalink (a `/posts/<slug>-activity-<id>-...`
+ * href) and the real commentary text -- joined back together by matching the numeric
+ * activity id embedded in BOTH the permalink and the id LinkedIn itself uses for the
+ * post, so a permalink is never paired with the wrong card's text by position alone.
+ */
+function parseFeedUpdates(html: string): Array<{ url: string; text: string }> {
+  const cards = html.split(/(?=<li class="mb-1">)/).slice(1);
+  const results: Array<{ url: string; text: string }> = [];
+  for (const card of cards) {
+    const linkMatch = card.match(/href="(https:\/\/www\.linkedin\.com\/posts\/[^"]+?-activity-(\d+)-[^"]*)"/);
+    const textMatch = card.match(/data-test-id="main-feed-activity-card__commentary">([\s\S]*?)<\/p>/);
+    if (!linkMatch || !textMatch) continue;
+    const text = textMatch[1]
+      .replace(/<[^>]+>/g, '') // strip inline anchor tags (e.g. linked mentions) from the commentary
+      .replace(/&amp;/g, '&')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+\n/g, '\n')
+      .trim();
+    if (!text) continue;
+    results.push({ url: linkMatch[1], text });
+    if (results.length >= MAX_UPDATES_PER_COMPANY) break;
+  }
+  return results;
+}
+
+const UpdateRecord = z.object({
+  company_id: z.string(),
+  url: z.string(),
+  text: z.string().min(1),
+});
+type UpdateRecord = z.infer<typeof UpdateRecord>;
+
+function upsertUpdateSnapshot(db: ReturnType<typeof migrate>, rec: UpdateRecord, idx: number) {
+  const capturedAt = new Date().toISOString();
+  const label = rec.text.slice(0, 80).trim();
+  db.prepare(
+    `insert into competitor_snapshots (id, company_id, item_type, label, value_text, url, captured_at)
+     values (@id, @company_id, 'update', @label, @value_text, @url, @captured_at)
+     on conflict(id) do update set value_text = excluded.value_text, url = excluded.url, captured_at = excluded.captured_at`,
+  ).run({
+    id: `snap-linkedin-update-${rec.company_id}-${idx}`,
+    company_id: rec.company_id,
+    label,
+    value_text: rec.text,
+    url: rec.url,
+    captured_at: capturedAt,
+  });
+}
+
+/**
+ * Fetches and ingests real recent LinkedIn company "Updates" (posts) for one
+ * company. Best-effort per company -- a failure here (no feedUpdatesBaseUrl found,
+ * blocked fetch) is reported via the returned error and does not throw, since profile
+ * ingestion (the invariant-bearing part of this file) must not be blocked by the
+ * additive updates feature. Same cache-before-parse discipline as everything else.
+ */
+async function fetchRecentUpdates(
+  db: ReturnType<typeof migrate>,
+  companyId: string,
+  slug: string,
+  overviewHtml: string,
+  opts: { cached: boolean },
+): Promise<{ written: number; error?: string }> {
+  const baseUrl = extractFeedUpdatesBaseUrl(overviewHtml);
+  if (!baseUrl) {
+    return { written: 0, error: `${slug}: no feedUpdatesBaseUrl found in overview page (layout change or authwall)` };
+  }
+  const feedUrl = `https://www.linkedin.com${baseUrl}`;
+
+  let html: string | null;
+  if (opts.cached) {
+    html = loadCachedHtml(slug, '-updates');
+    if (!html) return { written: 0, error: `${slug}: no cached updates HTML in ${RAW_DIR}` };
+  } else {
+    const result = await fetchOverviewViaBrightData(slug, feedUrl);
+    if (result.error || !result.html) {
+      return { written: 0, error: result.error ?? `${slug}: no updates html returned` };
+    }
+    html = result.html;
+    const iso = new Date().toISOString();
+    mkdirSync(RAW_DIR, { recursive: true });
+    // Cache BEFORE parsing, same discipline as every other fetch in this file.
+    writeFileSync(join(RAW_DIR, `${PLATFORM}-${slug}-updates-${iso.slice(0, 10)}.html`), html);
+  }
+
+  const posts = parseFeedUpdates(html);
+  if (posts.length === 0) {
+    return { written: 0, error: `${slug}: 0 real posts parsed out of the updates feed HTML (layout change)` };
+  }
+
+  let written = 0;
+  posts.forEach((p, idx) => {
+    const parsed = UpdateRecord.safeParse({ company_id: companyId, url: p.url, text: p.text });
+    if (!parsed.success) return;
+    upsertUpdateSnapshot(db, parsed.data, idx);
+    written += 1;
+  });
+  return { written };
 }
 
 function upsertSnapshot(db: ReturnType<typeof migrate>, rec: ProfileRecord) {
@@ -159,6 +301,7 @@ export async function ingestLinkedin(opts: { cached: boolean }) {
     const db = migrate();
     const errors: string[] = [];
     let written = 0;
+    let updatesWritten = 0;
 
     for (const [companyId, slug] of Object.entries(COMPANY_SLUGS)) {
       let html: string | null;
@@ -203,10 +346,21 @@ export async function ingestLinkedin(opts: { cached: boolean }) {
 
       upsertSnapshot(db, parsed.data);
       written += 1;
+
+      // Updates/posts (additive): best-effort per company, never blocks or fails
+      // the profile ingest above -- the profile snapshot is the invariant-bearing
+      // part of this file (records_extracted > 0 below is keyed off it).
+      const updatesResult = await fetchRecentUpdates(db, companyId, slug, html, opts);
+      if (updatesResult.error) {
+        errors.push(updatesResult.error);
+      } else {
+        updatesWritten += updatesResult.written;
+      }
     }
     db.close();
 
     span.setRecordCount(written);
+    span.setAttr('update_snapshots_written', updatesWritten);
     if (errors.length) span.setAttr('errors', errors.join(' | ').slice(0, 500));
 
     if (written === 0) {
@@ -215,9 +369,9 @@ export async function ingestLinkedin(opts: { cached: boolean }) {
       throw new Error(`records_extracted is 0: ${errors.join(' | ') || 'no companies produced a usable profile snapshot'}`);
     }
 
-    console.log(`[ingest:linkedin] ${written}/${Object.keys(COMPANY_SLUGS).length} profile snapshots written (${opts.cached ? 'cached' : 'live'})`);
+    console.log(`[ingest:linkedin] ${written}/${Object.keys(COMPANY_SLUGS).length} profile snapshots written, ${updatesWritten} update snapshots written (${opts.cached ? 'cached' : 'live'})`);
     if (errors.length) console.log('[ingest:linkedin] skipped:', errors.join(' | '));
-    return { skipped: false, records_extracted: written, errors };
+    return { skipped: false, records_extracted: written, update_snapshots_written: updatesWritten, errors };
   });
 }
 

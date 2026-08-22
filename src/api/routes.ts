@@ -525,6 +525,248 @@ export async function getCompetitors(
   });
 }
 
+/**
+ * Generates on-the-fly, grounded findings for a competitor's own posts when nothing
+ * pre-authored one -- same rationale and same construction as getTrendById's fallback
+ * generator (nothing auto-populates `findings` on ingest, so a company with real
+ * scraped posts but zero seeded findings would otherwise show an empty list even
+ * though real discourse exists). Reuses the identical burst-scoring algorithm scoped
+ * to just this company's posts (`floorOn: 'total'`, `minCount: 1` -- a small
+ * per-company corpus should not be held to the large-corpus noise floor), and the
+ * same gap-tolerant findVerbatimQuote so every quote is a real, literal substring of
+ * the post it cites. Never fabricates: a term only produces a finding if a real post
+ * verbatim contains it.
+ */
+function generateCompetitorFindings(db: Database.Database, companyId: string, posts: PostRow[]): Record<string, unknown>[] {
+  if (posts.length === 0) return [];
+  const window = burstWindow();
+  const ranked = scoreBurstTerms(
+    posts.map((p) => ({ text: p.text, posted_at: p.posted_at })),
+    window,
+    { minCount: 1, floorOn: 'total' },
+  );
+  const generated: Record<string, unknown>[] = [];
+  const usedPostIds = new Set<string>();
+  for (const r of ranked) {
+    if (generated.length >= 8) break;
+    // Prefer a post not already cited by an earlier term, so the findings list
+    // reflects several real posts rather than repeatedly quoting the same one.
+    const citedPost =
+      posts.find((p) => !usedPostIds.has(p.id) && findVerbatimQuote(r.term, p.text)) ??
+      posts.find((p) => findVerbatimQuote(r.term, p.text));
+    if (!citedPost) continue;
+    const quote = findVerbatimQuote(r.term, citedPost.text)!;
+    usedPostIds.add(citedPost.id);
+    generated.push({
+      id: `f-competitor-${companyId}-${r.term.replace(/\s+/g, '-')}`,
+      post_id: citedPost.id,
+      trend_id: null,
+      company_id: companyId,
+      use_case: 'competitor',
+      claim: `"${r.term}" comes up repeatedly in real discourse about this company: ${r.recent + r.prior} mention(s) in the retrieved posts.`,
+      quote,
+      category: 'discourse',
+      confidence: Math.min(1, (r.recent + r.prior) / 10),
+    });
+  }
+  return generated;
+}
+
+export interface CompetitorInsightSource {
+  id: string;
+  kind: 'linkedin_profile' | 'snapshot' | 'post';
+  url: string | null;
+}
+
+export interface CompetitorInsight {
+  summary: string;
+  sentiment: string;
+  pros: string[];
+  cons: string[];
+  sources: CompetitorInsightSource[];
+}
+
+interface InsightMaterial {
+  id: string;
+  kind: 'linkedin_profile' | 'snapshot' | 'post';
+  text: string;
+  url: string | null;
+}
+
+const MAX_INSIGHT_POSTS = 15;
+
+/**
+ * Item 28 (BOARD.tsv): synthesizes everything real currently known about a
+ * competitor -- its LinkedIn profile/update snapshots and real Reddit discourse
+ * findings/posts -- into ONE combined brief, rather than the page showing a single
+ * raw source (the "not combined insights, one source" feedback). ONE Anthropic call,
+ * constrained to ONLY the real material gathered here (same closed-context pattern
+ * as getChat), asked to separate what-the-company-is (from LinkedIn) from
+ * what-real-users-are-saying (sentiment + pros/cons from Reddit discourse), not just
+ * a price fact. Every pros/cons/summary claim must cite a `source_id` from the
+ * material actually given to the model; anything citing an id that is not a real
+ * material we supplied is dropped server-side (never silently kept), same defense-
+ * in-depth discipline as getChat's citation re-verification. Additive/optional:
+ * missing ANTHROPIC_API_KEY or zero source material both resolve to `null`, never
+ * blocking the rest of GET /api/competitors/:id.
+ */
+async function getCompetitorInsight(
+  db: Database.Database,
+  company: CompanyRow | undefined,
+  snapshots: SnapshotRow[],
+  findings: { post_id: string }[],
+  citedPosts: PostRow[],
+  span: { setAttr: (k: string, v: unknown) => void },
+): Promise<CompetitorInsight | null> {
+  if (!company) return null;
+
+  const materials: InsightMaterial[] = [];
+
+  const profileSnap = snapshots.find((s) => s.item_type === 'profile');
+  if (profileSnap) {
+    materials.push({ id: profileSnap.id, kind: 'linkedin_profile', text: profileSnap.value_text, url: profileSnap.url });
+  }
+  for (const s of snapshots) {
+    if (s.item_type === 'profile') continue;
+    materials.push({ id: s.id, kind: 'snapshot', text: `${s.label}: ${s.value_text}`, url: s.url });
+  }
+
+  // Independent of which posts happen to be cited by pre-existing/on-the-fly
+  // findings -- pull the company's own broader real post corpus so "what real users
+  // are saying" has genuine breadth to synthesize sentiment/pros/cons from, not just
+  // whichever single post a burst term happened to land on.
+  const corpusPosts = db
+    .prepare(`select * from posts where company_id = ? order by posted_at desc limit ?`)
+    .all(company.id, MAX_INSIGHT_POSTS) as PostRow[];
+  const seenPostIds = new Set<string>();
+  for (const p of [...corpusPosts, ...citedPosts]) {
+    if (seenPostIds.has(p.id)) continue;
+    seenPostIds.add(p.id);
+    materials.push({ id: p.id, kind: 'post', text: p.text, url: p.url });
+  }
+
+  span.setAttr('insight_materials_count', materials.length);
+  if (materials.length === 0) {
+    span.setAttr('insight_skipped_reason', 'no source material');
+    return null;
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    span.setAttr('insight_skipped_reason', 'no api key');
+    return null;
+  }
+
+  const materialsById = new Map(materials.map((m) => [m.id, m]));
+  const materialBlock = materials
+    .map((m) => `SOURCE_ID: ${m.id}\nKIND: ${m.kind}\nTEXT: ${m.text}`)
+    .join('\n---\n');
+
+  const systemPrompt = `You are writing a short competitor research brief using ONLY the sources below. Never invent a fact, statistic, or quote that is not present in one of these sources. Every claim you make in "summary", "pros", and "cons" MUST include the exact SOURCE_ID of the one source it is drawn from -- if a claim cannot be tied to a specific SOURCE_ID from the list, do not include it.
+
+Sources of kind "linkedin_profile" describe what the company IS (official positioning). Sources of kind "snapshot" are pricing/update facts. Sources of kind "post" are real user discourse (e.g. Reddit) -- use these for sentiment and product pros/cons as actually expressed by real users, going beyond just price facts: look for what people praise, complain about, compare to competitors, or struggle with.
+
+Respond as JSON only, no other text, matching this shape exactly:
+{
+  "summary": {"text": "<1-3 sentences on what the company is and does, prefer linkedin_profile sources>", "source_id": "<id>"},
+  "sentiment": "<one of: positive, mixed, negative, unclear>",
+  "pros": [{"claim": "<a specific pro/positive point real users express>", "source_id": "<id>"}],
+  "cons": [{"claim": "<a specific con/complaint/pain point real users express>", "source_id": "<id>"}]
+}
+Return at most 5 pros and 5 cons. If there is not enough real discourse to say something specific, return fewer items rather than inventing generic ones.
+
+SOURCES:
+${materialBlock}`;
+
+  let responseText: string;
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: `Write the combined competitor insight brief for ${company.name}.` }],
+    });
+    const block = message.content.find((b) => b.type === 'text');
+    responseText = block && block.type === 'text' ? block.text : '';
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    span.setAttr('insight_failure_reason', `anthropic call failed: ${reason}`);
+    return null;
+  }
+
+  let parsed: {
+    summary?: { text?: string; source_id?: string };
+    sentiment?: string;
+    pros?: { claim?: string; source_id?: string }[];
+    cons?: { claim?: string; source_id?: string }[];
+  };
+  try {
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
+  } catch {
+    span.setAttr('insight_failure_reason', 'model response was not valid JSON');
+    return null;
+  }
+
+  // Defense in depth, same discipline as getChat: never trust the model's own claim
+  // that a source_id is real. A claim citing an id that is not literally one of the
+  // materials we supplied is dropped, not silently kept.
+  const usedSources = new Set<string>();
+  const verifyAndCollect = (items: { claim?: string; source_id?: string }[] | undefined): string[] => {
+    const out: string[] = [];
+    for (const item of items ?? []) {
+      if (!item.claim || !item.source_id) continue;
+      if (!materialsById.has(item.source_id)) continue; // ungrounded, drop
+      usedSources.add(item.source_id);
+      out.push(item.claim);
+    }
+    return out;
+  };
+
+  const prosClaimed = (parsed.pros ?? []).length;
+  const consClaimed = (parsed.cons ?? []).length;
+  const pros = verifyAndCollect(parsed.pros);
+  const cons = verifyAndCollect(parsed.cons);
+
+  let summary: string;
+  if (parsed.summary?.text && parsed.summary.source_id && materialsById.has(parsed.summary.source_id)) {
+    usedSources.add(parsed.summary.source_id);
+    summary = parsed.summary.text;
+  } else if (parsed.summary?.text) {
+    // Summary text present but its cited source_id didn't verify -- same "drop the
+    // ungrounded claim" rule, but a whole-missing summary is a worse UX than one with
+    // no visible source, so fall back to an honest disclosure string instead of null.
+    span.setAttr('insight_summary_source_unverified', true);
+    summary = `(unable to verify source for this summary) ${company.name} details available from the sources listed below.`;
+  } else {
+    summary = `${company.name}: summary unavailable from current sources.`;
+  }
+
+  span.setAttr('insight_pros_verified', pros.length);
+  span.setAttr('insight_pros_claimed', prosClaimed);
+  span.setAttr('insight_cons_verified', cons.length);
+  span.setAttr('insight_cons_claimed', consClaimed);
+
+  if (pros.length === 0 && cons.length === 0 && usedSources.size === 0) {
+    // Nothing in the model's response survived verification -- honest null rather
+    // than returning an empty-looking but ostensibly "real" insight object.
+    span.setAttr('insight_skipped_reason', 'nothing verified after grounding check');
+    return null;
+  }
+
+  const sources: CompetitorInsightSource[] = [...usedSources].map((id) => {
+    const m = materialsById.get(id)!;
+    return { id: m.id, kind: m.kind, url: m.url };
+  });
+
+  return {
+    summary,
+    sentiment: typeof parsed.sentiment === 'string' ? parsed.sentiment : 'unclear',
+    pros,
+    cons,
+    sources,
+  };
+}
+
 export async function getCompetitorById(db: Database.Database, id: string) {
   return withSpan('api.competitors.byId', async (span) => {
     const company = db.prepare('select * from companies where id = ?').get(id);
@@ -533,10 +775,15 @@ export async function getCompetitorById(db: Database.Database, id: string) {
       return null;
     }
     const snapshots = db.prepare('select * from competitor_snapshots where company_id = ? order by captured_at desc').all(id);
-    const findings = db.prepare('select * from findings where company_id = ?').all(id);
-    const posts = db.prepare('select * from posts where company_id = ?').all(id);
+    let findings = db.prepare('select * from findings where company_id = ?').all(id) as { post_id: string }[];
+    const posts = db.prepare('select * from posts where company_id = ?').all(id) as PostRow[];
+    if (findings.length === 0 && posts.length > 0) {
+      findings = generateCompetitorFindings(db, id, posts) as unknown as { post_id: string }[];
+      span.setAttr('findings_generated_on_the_fly', findings.length);
+    }
+    const insight = await getCompetitorInsight(db, company as CompanyRow, snapshots as SnapshotRow[], findings, posts, span);
     span.setRecordCount(snapshots.length + findings.length + posts.length);
-    return { company, snapshots, findings, posts };
+    return { company, snapshots, findings, posts, insight };
   });
 }
 
@@ -892,8 +1139,21 @@ export async function getChat(db: Database.Database, question: string, scope?: s
               .all(...termWords)
     ) as PostRow[];
 
+    // Seed rows (id prefixed "seed-") are placeholder demo content meant to hold a
+    // slot only until real data exists for the same topic -- they should never
+    // outrank a real post that is a comparably good match just because the seed text
+    // happens to be phrased slightly closer to the query. Apply a penalty to seed
+    // scores rather than excluding them outright: a seed post can still win, and does
+    // win, when it is the only thing that matches at all (real score of 0), but a
+    // real post with genuine relevance now beats a seed post unless the seed is
+    // dramatically (2x+) more relevant.
+    const SEED_SCORE_PENALTY = 0.5;
+    const isSeedPost = (id: string) => id.startsWith('seed-');
     const matched = candidates
-      .map((p) => ({ post: p, score: scoreRelevance(p.text, term) }))
+      .map((p) => {
+        const raw = scoreRelevance(p.text, term);
+        return { post: p, score: isSeedPost(p.id) ? raw * SEED_SCORE_PENALTY : raw };
+      })
       .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.post.posted_at.localeCompare(a.post.posted_at)))
       .slice(0, 10)
       .map((r) => r.post);

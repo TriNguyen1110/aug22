@@ -67,18 +67,101 @@ const STOPWORDS = new Set([
 // entirely before tokenizing so they never enter the n-gram pool.
 const URL_RE = /https?:\/\/\S+|www\.\S+/gi;
 
-function ngrams(text: string): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(URL_RE, ' ')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w && !STOPWORDS.has(w) && w.length > 2);
+// Generic courtesy/filler phrases that show up constantly across totally unrelated
+// posts (a Reddit sign-off, a support-ticket closing line, a self-promo CTA) and carry
+// zero topical signal -- but survive single-word STOPWORDS filtering because none of
+// their individual words are stopwords on their own ("happy", "answer", "free",
+// "reach" are all real words). These get stripped from the token stream as whole
+// phrases (matched on the pre-stopword-filtered word sequence) BEFORE stopword
+// removal and n-gram windowing, so a phrase like "happy to answer" doesn't survive as
+// the false-signal bigram "happy answer" once "to" is stripped, and its individual
+// words don't leak into unrelated n-grams either (e.g. "solve real problem" getting
+// fragmented into "solve real" / "real problem" once other startup-pitch boilerplate
+// around it is removed). List is generic conversational/social boilerplate, not
+// topical content -- extend it rather than adding one-off exclusions per burst.
+const BOILERPLATE_PHRASES: string[][] = [
+  ['happy', 'to', 'answer'],
+  ['happy', 'to', 'help'],
+  ['let', 'me', 'know'],
+  ['let', 'us', 'know'],
+  ['thanks', 'for', 'reading'],
+  ['thanks', 'for', 'sharing'],
+  ['thanks', 'in', 'advance'],
+  ['feel', 'free', 'to'],
+  ['feel', 'free'],
+  ['any', 'questions'],
+  ['reach', 'out'],
+  ['dm', 'me'],
+  ['pm', 'me'],
+  ['check', 'it', 'out'],
+  ['in', 'the', 'comments'],
+  ['drop', 'a', 'comment'],
+  ['leave', 'a', 'comment'],
+  ['upvote', 'if'],
+  ['solve', 'a', 'real', 'problem'],
+  ['solve', 'real', 'problem'],
+  ['solve', 'real', 'problems'],
+  ['solving', 'a', 'real', 'problem'],
+  ['solving', 'real', 'problems'],
+  ['real', 'world', 'problem'],
+  ['long', 'story', 'short'],
+  ['long', 'time', 'lurker'],
+  ['first', 'time', 'poster'],
+  ['especially', 'interested'],
+  ['would', 'love', 'to', 'hear'],
+  ['curious', 'to', 'hear'],
+];
 
+// Remove any run of `words` that matches a boilerplate phrase, splicing it out of the
+// token stream entirely (not replacing with stopwords) so no fragment of it can form
+// a spurious n-gram with its former neighbors.
+function stripBoilerplatePhrases(words: string[]): string[] {
   const out: string[] = [];
-  for (let n = 1; n <= 3; n++) {
-    for (let i = 0; i + n <= words.length; i++) {
-      out.push(words.slice(i, i + n).join(' '));
+  outer: for (let i = 0; i < words.length; i++) {
+    for (const phrase of BOILERPLATE_PHRASES) {
+      if (phrase.length > words.length - i) continue;
+      let matches = true;
+      for (let j = 0; j < phrase.length; j++) {
+        if (words[i + j] !== phrase[j]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        i += phrase.length - 1;
+        continue outer;
+      }
+    }
+    out.push(words[i]);
+  }
+  return out;
+}
+
+// Sentence-boundary punctuation. Windowing n-grams across a sentence break produces
+// nonsense pairings once stopwords are stripped out from around the break -- e.g.
+// "...unnecessarily long. First 10 WAU..." becomes the adjacent-looking but
+// meaningless bigram "long first" once "unnecessarily" (a plain word, kept) sits
+// before "long" and the period/"10" disappear. Splitting into sentences first and
+// only windowing n-grams *within* a sentence is a cheap, general fix for this whole
+// class of cross-sentence artifact, rather than an ever-growing exclusion list of
+// specific accidental pairings.
+const SENTENCE_SPLIT_RE = /[.!?\n\r]+/g;
+
+function ngrams(text: string): string[] {
+  const out: string[] = [];
+  const cleaned = text.toLowerCase().replace(URL_RE, ' ');
+  for (const sentence of cleaned.split(SENTENCE_SPLIT_RE)) {
+    const rawWords = sentence
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+
+    const words = stripBoilerplatePhrases(rawWords).filter((w) => !STOPWORDS.has(w) && w.length > 2);
+
+    for (let n = 1; n <= 3; n++) {
+      for (let i = 0; i + n <= words.length; i++) {
+        out.push(words.slice(i, i + n).join(' '));
+      }
     }
   }
   return out;

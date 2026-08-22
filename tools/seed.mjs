@@ -65,6 +65,14 @@ const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
 const COMPANIES = [
   ['co-anthropic', 'Anthropic', 'anthropic.com', 'target', 'ai-infra', 22.0, 'enterprise', 'AI safety research lab, maker of Claude'],
   ['co-openai', 'OpenAI', 'openai.com', 'competitor', 'ai-infra', 34.5, 'enterprise', 'AI research and deployment, maker of ChatGPT/Codex'],
+  // 2026-08-22 competitor expansion: real major Anthropic competitors beyond OpenAI.
+  // market_share/size/niche here are illustrative estimates (Est. in the UI) like
+  // every other row in this table, until a real competitor_snapshots row backs them --
+  // niche gets superseded by a real LinkedIn overview snapshot once src/ingest/
+  // linkedin.ts runs live for these three (verified live 2026-08-22).
+  ['co-google', 'Google', 'google.com', 'competitor', 'ai-infra', 28.0, 'enterprise', 'Search and cloud giant, maker of Gemini'],
+  ['co-meta', 'Meta', 'meta.com', 'competitor', 'ai-infra', 15.0, 'enterprise', 'Social platforms company, maker of Llama'],
+  ['co-xai', 'xAI', 'x.ai', 'competitor', 'ai-infra', 6.0, 'startup', 'AI startup founded by Elon Musk, maker of Grok'],
   ['co-notion', 'Notion', 'notion.so', 'competitor', 'productivity-saas', 18.5, 'mid-market', 'all-in-one docs and wiki'],
   ['co-linear', 'Linear', 'linear.app', 'competitor', 'productivity-saas', 9.2, 'startup', 'issue tracking for engineering teams'],
   ['co-asana', 'Asana', 'asana.com', 'competitor', 'productivity-saas', 14.8, 'enterprise', 'work management for cross-functional teams'],
