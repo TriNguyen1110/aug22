@@ -1,5 +1,6 @@
 import { FindingCard } from '../../components/FindingCard';
 import { PageChat } from '../../components/PageChat';
+import { splitSeed, SeedDivider } from '../../components/seedSplit';
 
 type Post = {
   id: string;
@@ -54,18 +55,32 @@ export default async function MonitoringPage() {
       </section>
       {error && <p className="text-red-400">Could not load monitoring data: {error}</p>}
       {!error && findings.length === 0 && <p className="text-silver-dim">No findings yet.</p>}
-      {findings.length > 0 && (
-        <ul className="space-y-6">
-          {findings.map((f) => {
-            const post = postById.get(f.post_id);
-            return (
-              <li key={f.id}>
-                <FindingCard finding={f} post={post} />
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {findings.length > 0 && (() => {
+        const { real, seed } = splitSeed(findings, (f) => f.post_id);
+        return (
+          <>
+            {real.length > 0 && (
+              <ul className="space-y-6">
+                {real.map((f) => (
+                  <li key={f.id}>
+                    <FindingCard finding={f} post={postById.get(f.post_id)} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            {real.length > 0 && seed.length > 0 && <SeedDivider />}
+            {seed.length > 0 && (
+              <ul className="space-y-6">
+                {seed.map((f) => (
+                  <li key={f.id}>
+                    <FindingCard finding={f} post={postById.get(f.post_id)} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        );
+      })()}
       <PageChat scope="own" label="monitoring" />
     </main>
   );

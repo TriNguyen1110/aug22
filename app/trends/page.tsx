@@ -1,6 +1,7 @@
 import { Card, CardBody, Chip, Link } from '@heroui/react';
 import { PageChat } from '../../components/PageChat';
 import { FindingCard } from '../../components/FindingCard';
+import { splitSeed, SeedDivider } from '../../components/seedSplit';
 
 type Trend = {
   id: string;
@@ -169,21 +170,33 @@ export default async function TrendsPage({
                 </Card>
               )}
 
-              {searchFindings.length > 0 && (
-                <div className="mt-6">
-                  <h3 className="font-display text-xl font-semibold text-[#eef1f0]">Findings</h3>
-                  <ul className="mt-4 space-y-6">
-                    {searchFindings.map((f) => {
-                      const post = postById.get(f.post_id);
-                      return (
-                        <li key={f.id}>
-                          <FindingCard finding={f} post={post} />
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
+              {searchFindings.length > 0 && (() => {
+                const { real, seed } = splitSeed(searchFindings, (f) => f.post_id);
+                return (
+                  <div className="mt-6">
+                    <h3 className="font-display text-xl font-semibold text-[#eef1f0]">Findings</h3>
+                    {real.length > 0 && (
+                      <ul className="mt-4 space-y-6">
+                        {real.map((f) => (
+                          <li key={f.id}>
+                            <FindingCard finding={f} post={postById.get(f.post_id)} />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {real.length > 0 && seed.length > 0 && <SeedDivider />}
+                    {seed.length > 0 && (
+                      <ul className={`${real.length > 0 ? '' : 'mt-4'} space-y-6`}>
+                        {seed.map((f) => (
+                          <li key={f.id}>
+                            <FindingCard finding={f} post={postById.get(f.post_id)} />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()}
             </>
           )}
         </section>

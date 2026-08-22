@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardBody, Input, Button, Link } from '@heroui/react';
 
 type Citation = { post_id: string; quote: string; url: string };
@@ -16,6 +16,20 @@ export function PageChat({ scope, label }: { scope: 'trends' | 'competitor' | 'o
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ChatResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState(
+    'Checking live data and generating a grounded answer — this can take up to a minute.',
+  );
+
+  useEffect(() => {
+    if (!loading) return;
+    setStatusMessage(
+      'Checking live data and generating a grounded answer — this can take up to a minute.',
+    );
+    const timer = setTimeout(() => {
+      setStatusMessage('Still working — verifying sources...');
+    }, 12000);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -58,6 +72,16 @@ export function PageChat({ scope, label }: { scope: 'trends' | 'competitor' | 'o
             Ask
           </Button>
         </form>
+
+        {loading && (
+          <p className="flex items-center gap-2 text-sm text-silver-dim" role="status" aria-live="polite">
+            <span
+              className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-silver/30 border-t-teal"
+              aria-hidden="true"
+            />
+            {statusMessage}
+          </p>
+        )}
 
         {error && <p className="text-sm text-red-400">{error}</p>}
 

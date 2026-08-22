@@ -1,6 +1,8 @@
-import { Card, CardBody, Link } from '@heroui/react';
+import { Link } from '@heroui/react';
 import { ArrowLeft } from 'lucide-react';
 import { FindingCard } from '../../../components/FindingCard';
+import { SnapshotTable } from '../../../components/SnapshotTable';
+import { splitSeed, SeedDivider } from '../../../components/seedSplit';
 
 type Company = {
   id: string;
@@ -85,52 +87,41 @@ export default async function CompetitorDetailPage({ params }: { params: { id: s
             <h2 className="font-display text-2xl font-semibold text-[#eef1f0]">Snapshots</h2>
             {snapshots.length === 0 && <p className="mt-3 text-silver-dim">No snapshots yet.</p>}
             {snapshots.length > 0 && (
-              <Card className="glass-card mt-6 bg-transparent">
-                <CardBody className="overflow-x-auto p-0">
-                  <table className="w-full border-collapse text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-silver/10 text-xs uppercase tracking-wide text-silver-dim">
-                        <th className="px-6 py-5 font-medium">Type</th>
-                        <th className="px-6 py-5 font-medium">Label</th>
-                        <th className="px-6 py-5 font-medium">Value</th>
-                        <th className="px-6 py-5 font-medium">Source</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {snapshots.map((s) => (
-                        <tr key={s.id} className="border-b border-silver/5 last:border-0 transition-colors hover:bg-white/[0.03]">
-                          <td className="px-6 py-5 text-silver">{s.item_type}</td>
-                          <td className="px-6 py-5 text-silver">{s.label}</td>
-                          <td className="px-6 py-5 text-silver">{s.value_text}</td>
-                          <td className="px-6 py-5">
-                            <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm text-teal hover:text-teal-dim">
-                              link
-                            </Link>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </CardBody>
-              </Card>
+              <div className="mt-6">
+                <SnapshotTable snapshots={snapshots} />
+              </div>
             )}
           </section>
 
           <section>
             <h2 className="font-display text-2xl font-semibold text-[#eef1f0]">Findings</h2>
             {findings.length === 0 && <p className="mt-3 text-silver-dim">No findings yet.</p>}
-            {findings.length > 0 && (
-              <ul className="mt-6 space-y-6">
-                {findings.map((f) => {
-                  const post = postById.get(f.post_id);
-                  return (
-                    <li key={f.id}>
-                      <FindingCard finding={f} post={post} />
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            {findings.length > 0 && (() => {
+              const { real, seed } = splitSeed(findings, (f) => f.post_id);
+              return (
+                <>
+                  {real.length > 0 && (
+                    <ul className="mt-6 space-y-6">
+                      {real.map((f) => (
+                        <li key={f.id}>
+                          <FindingCard finding={f} post={postById.get(f.post_id)} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {real.length > 0 && seed.length > 0 && <SeedDivider />}
+                  {seed.length > 0 && (
+                    <ul className={`${real.length > 0 ? '' : 'mt-6'} space-y-6`}>
+                      {seed.map((f) => (
+                        <li key={f.id}>
+                          <FindingCard finding={f} post={postById.get(f.post_id)} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              );
+            })()}
           </section>
         </>
       )}
