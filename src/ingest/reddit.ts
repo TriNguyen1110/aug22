@@ -172,6 +172,20 @@ async function fetchFromBrightData(): Promise<unknown> {
  * failure is reported honestly (attempted: true, ok: false, real error message)
  * rather than swallowed, per CONTRACT.md's /api/chat shape.
  */
+/**
+ * Picks the most relevant subreddit for a free-text question, by checking whether
+ * any known subreddit name appears as a whole word in the question -- not by
+ * requiring the entire question to equal a subreddit name (that would never match
+ * a real natural-language question, silently defaulting to r/saas every time).
+ */
+function pickSubredditForQuestion(question: string): string {
+  const lower = question.toLowerCase();
+  for (const subreddit of SUBREDDITS) {
+    if (new RegExp(`\\b${subreddit}\\b`).test(lower)) return subreddit;
+  }
+  return 'saas';
+}
+
 export async function attemptTargetedFetch(term: string): Promise<{
   attempted: boolean;
   ok: boolean;
@@ -183,7 +197,7 @@ export async function attemptTargetedFetch(term: string): Promise<{
     return { attempted: false, ok: false, records_extracted: 0, error: 'BRIGHTDATA_API_TOKEN not configured' };
   }
 
-  const subreddit = SUBREDDITS.includes(term.toLowerCase()) ? term.toLowerCase() : 'saas';
+  const subreddit = pickSubredditForQuestion(term);
   const result = await fetchSubredditViaBrightData(subreddit);
 
   if (result.error || result.records.length === 0) {

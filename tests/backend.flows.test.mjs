@@ -103,6 +103,17 @@ test('trends flow with no q param is unchanged: reads the global trends table', 
   assert.ok(Array.isArray(j.trends) && j.trends.length > 0);
 });
 
+test('trends flow reflects a real ingest+detect sweep, not just the 3 original seed trends', async () => {
+  const j = await get('/api/trends');
+  const seedIds = new Set(['seed-t1', 'seed-t2', 'seed-t3']);
+  assert.ok(j.trends.length > 3, 'global trends table should hold more than the 3 original seed rows once a real ingest+detect run has happened');
+  const nonSeed = j.trends.filter((t) => !seedIds.has(t.id));
+  assert.ok(nonSeed.length > 0, 'at least one trend row must come from a real detect run, not only seed-t1/t2/t3');
+  for (const t of nonSeed) {
+    assert.ok(t.recent_count >= 0 && t.prior_count >= 0, `trend ${t.id} must carry real counts, not placeholders`);
+  }
+});
+
 test('competitors flow: list includes both tracked competitors with snapshots', async () => {
   const j = await get('/api/competitors');
   const names = j.companies.map((c) => c.name);
