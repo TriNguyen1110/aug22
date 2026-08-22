@@ -47,7 +47,16 @@ function escapeRegex(s: string): string {
 function findVerbatimQuote(term: string, text: string): string | null {
   const words = term.split(' ').filter(Boolean).map(escapeRegex);
   if (words.length === 0) return null;
-  const pattern = new RegExp(words.join('[^a-zA-Z0-9]+'), 'i');
+  // n-grams are built from a stopword-filtered token stream (src/detect/burst.ts's
+  // ngrams()), so two "adjacent" n-gram words are not always literally adjacent in the
+  // raw post text -- a stopword ("to", "the", "a"...) may sit between them. Tolerate up
+  // to 2 intervening short words (<=6 chars each, well past the standing stopword list)
+  // so the match still finds a real phrase without bridging across unrelated content.
+  // The returned string is always exactly what text.match() found -- a real, literal
+  // substring -- so this never fabricates a quote, it just allows the search to find
+  // the real contiguous phrase instead of requiring hard adjacency between filtered tokens.
+  const gap = '(?:\\s+[a-zA-Z0-9]{1,6}){0,2}\\s+';
+  const pattern = new RegExp(words.join(gap), 'i');
   const m = text.match(pattern);
   return m ? m[0] : null;
 }
@@ -367,9 +376,14 @@ export async function getTrendById(db: Database.Database, id: string) {
       // findings the same way the ?q= scoped search does: on the fly from posts whose
       // text actually contains the term, quote taken verbatim so the grounding
       // invariant holds by construction (findVerbatimQuote never fabricates).
-      const matched = db
-        .prepare(`select * from posts where text like '%' || ? || '%' collate nocase`)
-        .all(trend.term) as PostRow[];
+      // A strict SQL `LIKE '%term%'` pre-filter would miss posts where the n-gram's
+      // words are adjacent only after stopword-filtering (e.g. term "happy answer"
+      // extracted from "Happy to answer") -- the term counted as a recent mention by
+      // the token-based burst algorithm is not always a literal substring. Scan all
+      // posts (corpus is small enough for a hackathon build) and let the same
+      // gap-tolerant findVerbatimQuote used elsewhere decide what's a real match,
+      // instead of two inconsistent notions of "contains the term".
+      const matched = db.prepare(`select * from posts`).all() as PostRow[];
       const citedPosts = new Map<string, PostRow>();
       const generated: Record<string, unknown>[] = [];
       for (const p of matched) {
@@ -527,7 +541,7 @@ const NAIVE_CACHE_TTL_MS = 60_000;
 let naiveCache: { at: number; value: Record<string, unknown> } | null = null;
 
 async function fetchNaiveUncached(span: { setAttr: (k: string, v: unknown) => void }): Promise<Record<string, unknown>> {
-  const naiveUrl = 'https://www.reddit.com/r/notion.json';
+  const naiveUrl = 'https://www.reddit.com/r/singularity.json';
   try {
     const res = await fetch(naiveUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; trendwatch-demo/1.0)' },
@@ -618,13 +632,13 @@ const CHAT_STOPWORDS = new Set([
 ]);
 
 /**
- * Best-effort keyword/target extraction from a free-text question: prefer a known
- * company name mentioned in the question (drives both the live Bright Data
- * subreddit attempt and the DB grounding search toward the same target), otherwise
- * fall back to the longest non-stopword word in the question. Heuristic on purpose
- * per CONTRACT.md -- the LLM never decides what to search for, this does.
+ * Fallback keyword/target extraction from a free-text question, used ONLY when the
+ * Step 1 tool-selection call below fails (missing API key, network error, malformed
+ * tool response) -- graceful degradation, not the primary path anymore. Prefers a
+ * known company name mentioned in the question, otherwise the longest non-stopword
+ * word.
  */
-function extractChatTerm(question: string, companyNames: string[]): string {
+function extractChatTermHeuristic(question: string, companyNames: string[]): string {
   const lower = question.toLowerCase();
   for (const name of companyNames) {
     if (lower.includes(name.toLowerCase())) return name;
@@ -635,6 +649,110 @@ function extractChatTerm(question: string, companyNames: string[]): string {
     .filter((w) => w.length > 2 && !CHAT_STOPWORDS.has(w));
   if (words.length === 0) return question.trim();
   return words.reduce((longest, w) => (w.length > longest.length ? w : longest), words[0]);
+}
+
+/**
+ * One distinctly-named, distinctly-scoped tool per page's chat agent, rather than
+ * one shared generic tool -- the "agent per page" framing (trends/competitors/
+ * monitoring each having their own tool) is real in the tool definition itself,
+ * not a post-hoc SQL filter bolted onto a generic search. Each entry's
+ * description frames the domain the way that page's assistant actually reasons
+ * about it (market/tech discourse vs. named-competitor research vs. monitoring
+ * the target company's own reception). `scope` here is CONTRACT.md's chat scope
+ * ('trends' | 'competitor' | 'own'); omitted/unknown falls back to the generic
+ * `search_data` tool below so any caller that doesn't pass scope keeps today's
+ * whole-corpus behavior.
+ */
+const SCOPED_TOOLS: Record<string, { name: string; description: string }> = {
+  trends: {
+    name: 'search_trends',
+    description:
+      "Search general market and tech discourse for the trend/topic most central to the user's question, and optionally trigger a live Bright Data fetch of fresh discourse on it. Choose the single best search term or short phrase (a product name, technology, or specific topic) that would actually appear verbatim in relevant posts about emerging trends.",
+  },
+  competitor: {
+    name: 'search_competitors',
+    description:
+      "Search discourse about named competitors for the company/product most central to the user's question (pricing, activity, or sentiment about a competitor), and optionally trigger a live Bright Data fetch of fresh competitor discourse. Choose the single best search term or short phrase (usually a competitor's company or product name) that would actually appear verbatim in relevant posts.",
+  },
+  own: {
+    name: 'search_own_reception',
+    description:
+      "Search discourse about how our own company/product is being received (monitoring), and optionally trigger a live Bright Data fetch of fresh mentions. Choose the single best search term or short phrase (a feature, product name, or specific topic) that would actually appear verbatim in posts mentioning us.",
+  },
+};
+
+const GENERIC_TOOL = {
+  name: 'search_data',
+  description:
+    "Search the ingested social-discourse corpus and optionally trigger a live Bright Data fetch for a specific topic/term relevant to the user's question. Choose the single best search term or short phrase (e.g. company name, product name, specific topic) that would actually appear in relevant posts.",
+};
+
+/**
+ * Step 1 of the agentic chat flow: the model itself picks the search term via a
+ * forced tool call, rather than a regex heuristic pre-processing the question.
+ * This is the "Bright Data pipeline as a tool of the AI agent" the user asked
+ * for -- Claude decides what to search for, then Step 2 executes the exact same
+ * two real operations (attemptTargetedFetch + posts LIKE retrieval) with the
+ * model's chosen term. Which tool is offered depends on `scope` (SCOPED_TOOLS),
+ * so /trends, /competitors, /monitoring each get their own named, distinctly-
+ * described agent tool rather than sharing one generic one; omitted/unknown
+ * scope uses the generic tool. Falls back to the heuristic on ANY failure (no
+ * API key, network, rate limit, malformed tool_use block) so this degrades
+ * gracefully instead of becoming a new single point of failure for the whole
+ * chat request.
+ */
+async function selectSearchTerm(
+  question: string,
+  scope: string | undefined,
+  companyNames: string[],
+  span: { setAttr: (k: string, v: unknown) => void },
+): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    span.setAttr('term_selection', 'heuristic (no api key)');
+    return extractChatTermHeuristic(question, companyNames);
+  }
+  const tool = (scope && SCOPED_TOOLS[scope]) || GENERIC_TOOL;
+  span.setAttr('tool_offered', tool.name);
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 256,
+      tools: [
+        {
+          name: tool.name,
+          description: tool.description,
+          input_schema: {
+            type: 'object',
+            properties: {
+              term: {
+                type: 'string',
+                description:
+                  "The single best search term for finding relevant posts. Retrieval is a literal substring match against raw post text, so STRONGLY prefer a single distinctive word (a company name, product name, or one specific keyword, e.g. \"codex\" or \"notion\") over a multi-word descriptive phrase -- a phrase like \"Notion calendar feature\" will usually match ZERO posts even when many posts discuss that exact topic, because the words rarely appear adjacent in that literal order. Only use two words together if they are a fixed name that is always written together (e.g. \"open ai\").",
+              },
+            },
+            required: ['term'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: tool.name },
+      messages: [{ role: 'user', content: question }],
+    });
+    const toolUse = message.content.find((b) => b.type === 'tool_use' && b.name === tool.name);
+    if (!toolUse || toolUse.type !== 'tool_use') {
+      throw new Error(`model did not return a ${tool.name} tool_use block`);
+    }
+    const input = toolUse.input as { term?: unknown };
+    const term = typeof input.term === 'string' ? input.term.trim() : '';
+    if (!term) throw new Error(`${tool.name} tool_use returned an empty term`);
+    span.setAttr('term_selection', 'agentic tool-call');
+    return term;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    span.setAttr('term_selection_failure_reason', reason);
+    span.setAttr('term_selection', 'heuristic (fallback)');
+    return extractChatTermHeuristic(question, companyNames);
+  }
 }
 
 export interface ChatCitation {
@@ -684,10 +802,10 @@ export async function getChat(db: Database.Database, question: string, scope?: s
     if (scope) span.setAttr('scope', scope);
 
     const companyNames = (db.prepare(`select name from companies`).all() as { name: string }[]).map((c) => c.name);
-    const term = extractChatTerm(question, companyNames);
+    const term = await selectSearchTerm(question, scope, companyNames, span);
     span.setAttr('extracted_term', term);
 
-    const brightdataResult = await attemptTargetedFetch(term);
+    const brightdataResult = await attemptTargetedFetch(term, scope);
     span.setAttr('brightdata_attempted', brightdataResult.attempted);
     span.setAttr('brightdata_ok', brightdataResult.ok);
     if (brightdataResult.error) span.setAttr('brightdata_error', brightdataResult.error);
