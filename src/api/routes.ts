@@ -8,7 +8,7 @@ import type Database from 'better-sqlite3';
 import { readdirSync } from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { withSpan } from '../otel';
-import { burstWindow, scoreBurstTerms } from '../detect/burst';
+import { burstWindow, scoreBurstTerms, topCorpusTerms, type BurstWindow } from '../detect/burst';
 import { attemptTargetedFetch } from '../ingest/reddit';
 
 export async function getHealth(db: Database.Database) {
@@ -65,6 +65,153 @@ interface PostRow {
 }
 
 /**
+ * ONE cheap LLM call (claude-haiku-4-5-20251001, same model as chat) that picks which
+ * of the real, corpus-present `candidates` are topically/semantically related to
+ * `query` -- e.g. query "ai agent" -> candidates might include "claude", "codex",
+ * "ai slop" if those genuinely occur in the corpus. The model can ONLY select from
+ * the provided candidate list (never invent a term), which is what keeps this
+ * grounded: every "related" result names something real users actually said, not a
+ * hallucinated synonym. Guarded like every other sponsor key -- missing key or any
+ * call/parse failure returns [] rather than blocking the main trends/findings result,
+ * per CONTRACT.md (additive, never a hard requirement).
+ */
+async function getRelatedCandidateTerms(
+  query: string,
+  candidates: string[],
+  span: { setAttr: (k: string, v: unknown) => void },
+): Promise<string[]> {
+  if (!process.env.ANTHROPIC_API_KEY || candidates.length === 0) {
+    span.setAttr('related_skipped_reason', !process.env.ANTHROPIC_API_KEY ? 'no api key' : 'no candidates');
+    return [];
+  }
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const systemPrompt = `You pick related terms from a fixed candidate list. You may ONLY return terms that appear verbatim in the CANDIDATES list below -- never invent, rephrase, or combine a term that is not one of the exact strings given. Given a search query, return the candidates that are topically or semantically related to it (e.g. for a query like "ai agent", real corpus terms like "claude", "codex", or "ai slop" would be related if present in the candidate list).
+
+CANDIDATES:
+${candidates.map((c) => `- ${c}`).join('\n')}
+
+Respond as JSON only, no other text: {"related": ["<candidate>", "<candidate>", ...]}. Return at most 8. If nothing is genuinely related, return an empty array.`;
+
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: query }],
+    });
+    const block = message.content.find((b) => b.type === 'text');
+    const responseText = block && block.type === 'text' ? block.text : '';
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : responseText) as { related?: string[] };
+    const candidateSet = new Set(candidates);
+    // Defense in depth: never trust the model's own claim that a term is a real
+    // candidate. Drop anything it returned that isn't literally in the list we gave it.
+    const related = [...new Set((parsed.related ?? []).filter((t) => typeof t === 'string' && candidateSet.has(t)))];
+    span.setAttr('related_candidates_considered', candidates.length);
+    span.setAttr('related_terms_selected', related.length);
+    return related;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    span.setAttr('related_failure_reason', reason);
+    return [];
+  }
+}
+
+/**
+ * Computes one Trend-shaped row for a single term the same way the main `?q=` scoring
+ * does (matched posts by substring, scoreBurstTerms scoped), plus a grounded finding
+ * if a post literally contains the term verbatim. Used for related-term expansion so
+ * each related term gets a real recent/prior/score computed from real posts, not a
+ * copy of the original query's numbers. Returns null if nothing in the corpus matches
+ * the term at all -- never fabricate a Trend row for a term with zero real posts.
+ */
+function computeTrendForTerm(
+  db: Database.Database,
+  term: string,
+  window: BurstWindow,
+  idPrefix: string,
+): { trend: Record<string, unknown>; finding: Record<string, unknown> | null } | null {
+  const matched = db
+    .prepare(`select * from posts where text like '%' || ? || '%' collate nocase`)
+    .all(term) as PostRow[];
+  if (matched.length === 0) return null;
+
+  const ranked = scoreBurstTerms(
+    matched.map((p) => ({ text: p.text, posted_at: p.posted_at })),
+    window,
+    { minCount: 1, floorOn: 'total', relevanceTo: term },
+  );
+  const exact = ranked.find((r) => r.term === term.toLowerCase()) ?? ranked[0];
+  if (!exact) return null;
+
+  const trendId = `${idPrefix}-${exact.term.replace(/\s+/g, '-')}`;
+  const trend = {
+    id: trendId,
+    term: exact.term,
+    recent_count: exact.recent,
+    prior_count: exact.prior,
+    score: exact.score,
+    window_start: window.priorStart,
+    window_end: window.nowIso,
+  };
+
+  const citedPost = matched.find((p) => findVerbatimQuote(exact.term, p.text));
+  let finding: Record<string, unknown> | null = null;
+  if (citedPost) {
+    const quote = findVerbatimQuote(exact.term, citedPost.text)!;
+    finding = {
+      id: `f-${trendId}`,
+      post_id: citedPost.id,
+      trend_id: trendId,
+      company_id: citedPost.company_id,
+      use_case: 'trends',
+      claim: `"${exact.term}" is related to "${term}" and trending: ${exact.recent} recent mention(s) vs ${exact.prior} prior.`,
+      quote,
+      category: 'trend',
+      confidence: Math.min(1, exact.score / 5),
+    };
+  }
+  return { trend, finding };
+}
+
+/**
+ * Grounded related-term expansion for `?q=` (CONTRACT.md): asks the LLM which real,
+ * corpus-present n-grams are related to `q`, then computes a real Trend+finding for
+ * each one it picks (bounded to top MAX_RELATED so a broad query can't blow up the
+ * response). Never blocks the caller and never fabricates -- on any failure (no API
+ * key, LLM error, zero related picks) this returns empty arrays.
+ */
+const MAX_RELATED = 8;
+
+async function computeRelated(
+  db: Database.Database,
+  q: string,
+  span: { setAttr: (k: string, v: unknown) => void },
+  excludeTerms: Set<string> = new Set(),
+): Promise<{ trends: Record<string, unknown>[]; findings: Record<string, unknown>[] }> {
+  const qLower = q.toLowerCase();
+  const candidates = topCorpusTerms(db).filter((t) => t !== qLower && !excludeTerms.has(t));
+  const relatedTerms = await getRelatedCandidateTerms(q, candidates, span);
+  const window = burstWindow();
+  const idPrefix = `related-${qLower.replace(/\s+/g, '-')}`;
+
+  const trends: Record<string, unknown>[] = [];
+  const findings: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  for (const term of relatedTerms.slice(0, MAX_RELATED)) {
+    const computed = computeTrendForTerm(db, term, window, idPrefix);
+    if (!computed) continue; // no real post backs this term; skip rather than fabricate
+    const resolvedTerm = (computed.trend as { term: string }).term;
+    if (seen.has(resolvedTerm) || excludeTerms.has(resolvedTerm)) continue; // no duplicate with main trends
+    seen.add(resolvedTerm);
+    trends.push(computed.trend);
+    if (computed.finding) findings.push(computed.finding);
+  }
+  span.setAttr('related_trends_found', trends.length);
+  return { trends, findings };
+}
+
+/**
  * On-the-fly, unpersisted burst detection scoped to posts whose text matches `q`
  * (case-insensitive substring, any source_type). Reuses the exact recent/prior/floor
  * scoring in src/detect/burst.ts -- just fed a filtered post list instead of the
@@ -79,7 +226,7 @@ export async function getTrendsSearch(db: Database.Database, rawQuery: string) {
     span.setAttr('query', q);
     if (!q) {
       span.setAttr('failure_reason', 'empty query');
-      return { query: rawQuery, matched_posts: 0, trends: [], findings: [], posts: [] };
+      return { query: rawQuery, matched_posts: 0, trends: [], findings: [], posts: [], related: [] };
     }
 
     const matched = db
@@ -89,7 +236,11 @@ export async function getTrendsSearch(db: Database.Database, rawQuery: string) {
     span.setRecordCount(matched.length);
     if (matched.length === 0) {
       span.setAttr('failure_reason', 'zero matched posts');
-      return { query: q, matched_posts: 0, trends: [], findings: [], posts: [] };
+      // Even with zero direct matches, related-term expansion can still surface
+      // something real -- e.g. "AI Agent" itself never appears verbatim, but "claude"
+      // or "codex" do. Additive only: never blocks or fabricates the honest zero.
+      const related = await computeRelated(db, q, span);
+      return { query: q, matched_posts: 0, trends: [], findings: [], posts: [], related: related.trends };
     }
 
     const window = burstWindow();
@@ -134,7 +285,28 @@ export async function getTrendsSearch(db: Database.Database, rawQuery: string) {
     }
 
     span.setAttr('trends_found', trends.length);
-    return { query: q, matched_posts: matched.length, trends, findings, posts: [...citedPosts.values()] };
+
+    const mainTerms = new Set(trends.map((t) => (t as { term: string }).term));
+    const related = await computeRelated(db, q, span, mainTerms);
+    // Related findings cite posts that may not already be in `citedPosts` (they can
+    // come from a different, related term's matched set) -- fold them in the same
+    // grounded way so `posts` always contains every post any returned finding cites.
+    for (const f of related.findings) {
+      const postId = (f as { post_id: string }).post_id;
+      if (!citedPosts.has(postId)) {
+        const p = matched.find((m) => m.id === postId) ?? (db.prepare('select * from posts where id = ?').get(postId) as PostRow | undefined);
+        if (p) citedPosts.set(postId, p);
+      }
+    }
+
+    return {
+      query: q,
+      matched_posts: matched.length,
+      trends,
+      findings: [...findings, ...related.findings],
+      posts: [...citedPosts.values()],
+      related: related.trends,
+    };
   });
 }
 

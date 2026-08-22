@@ -53,11 +53,24 @@ const STOPWORDS = new Set([
   'page', 'pages', 'post', 'posts', 'comment', 'comments', 'thread', 'sub', 'reddit',
   'yeah', 'yep', 'ok', 'okay', 'oh', 'hi', 'hey', 'hello', 'thanks', 'thank', 'please',
   'sure', 'maybe', 'actually', 'basically', 'literally', 'kind', 'sort', 'bit', 'stuff',
+  // URL/markup debris that survives punctuation-stripping if a URL slips past URL_RE
+  // (e.g. wrapped in markdown brackets or missing a scheme)
+  'http', 'https', 'www', 'com', 'org', 'net', 'html', 'png', 'jpg', 'jpeg', 'gif',
+  'webp', 'amp', 'auto', 'width', 'height', 'format', 'redd', 'preview', 'imgur',
+  'href', 'src',
 ]);
+
+// Reddit post bodies routinely embed raw image/link URLs (preview.redd.it?width=...&
+// format=png&auto=webp&amp;...), and their query-string tokens (https, www, com, png,
+// amp, webp, auto, width, format, redd, preview) survive punctuation-stripping as
+// plausible-looking "phrases" that are actually URL debris, not language. Strip URLs
+// entirely before tokenizing so they never enter the n-gram pool.
+const URL_RE = /https?:\/\/\S+|www\.\S+/gi;
 
 function ngrams(text: string): string[] {
   const words = text
     .toLowerCase()
+    .replace(URL_RE, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((w) => w && !STOPWORDS.has(w) && w.length > 2);
@@ -140,7 +153,7 @@ export function scoreBurstTerms(
     }
   }
 
-  return [...counts.entries()]
+  const ranked = [...counts.entries()]
     .map(([term, c]) => ({
       term,
       recent: c.recent,
@@ -149,17 +162,38 @@ export function scoreBurstTerms(
       // absolute floor below filters out low-volume noise regardless of ratio.
       score: c.recent / Math.max(c.prior, 1),
     }))
-    .filter((r) => (floorOn === 'recent' ? r.recent : r.recent + r.prior) >= minCount)
-    .sort((a, b) => {
-      if (opts.relevanceTo) {
-        const rel = opts.relevanceTo.toLowerCase();
-        const aMatch = a.term.includes(rel) ? 1 : 0;
-        const bMatch = b.term.includes(rel) ? 1 : 0;
-        if (aMatch !== bMatch) return bMatch - aMatch;
-      }
-      return b.score - a.score;
-    })
-    .slice(0, MAX_TERMS);
+    .filter((r) => (floorOn === 'recent' ? r.recent : r.recent + r.prior) >= minCount);
+
+  const rank = (a: RankedTerm, b: RankedTerm) => {
+    if (opts.relevanceTo) {
+      const rel = opts.relevanceTo.toLowerCase();
+      const aMatch = a.term.includes(rel) ? 1 : 0;
+      const bMatch = b.term.includes(rel) ? 1 : 0;
+      if (aMatch !== bMatch) return bMatch - aMatch;
+    }
+    return b.score - a.score;
+  };
+
+  // Unigrams are corpus word-frequency, not signal: "saas", "product", "based" have
+  // inherently higher raw counts than any 2-3 word phrase and drown out anything
+  // meaningful ("notion onboarding", "ai agent") if ranked on the same list. Surface
+  // phrases first; only fall back to unigrams to fill remaining slots (or when no
+  // phrase clears the floor at all) so the output is never empty.
+  //
+  // Exception: if the caller passed `relevanceTo` (the scoped `?q=` search), the
+  // user searched for that exact term -- if it clears the floor at all, it MUST be
+  // in the result regardless of whether it happens to be a unigram, since it's the
+  // literal thing they asked about. Pin an exact match to the front rather than
+  // letting it get crowded out by phrase-preference in a post with many phrases.
+  const relLower = opts.relevanceTo?.toLowerCase();
+  const exactMatch = relLower ? ranked.find((r) => r.term === relLower) : undefined;
+  const rest = exactMatch ? ranked.filter((r) => r !== exactMatch) : ranked;
+
+  const phrases = rest.filter((r) => r.term.includes(' ')).sort(rank);
+  const unigrams = rest.filter((r) => !r.term.includes(' ')).sort(rank);
+
+  const combined = exactMatch ? [exactMatch, ...phrases, ...unigrams] : [...phrases, ...unigrams];
+  return combined.slice(0, MAX_TERMS);
 }
 
 /**
@@ -227,6 +261,33 @@ export function detectTrends(db: Database.Database): number {
   tx(ranked);
 
   return ranked.length;
+}
+
+/**
+ * Bounded vocabulary of real n-gram terms actually present in the corpus, ranked by
+ * raw frequency (not burst score -- this is a candidate list for grounded LLM
+ * expansion in src/api/routes.ts, not a trend ranking). Scoped to the most recent
+ * `postLimit` posts so this stays cheap on a large corpus, and capped to `termLimit`
+ * terms so the resulting prompt to the LLM stays small. Every term returned is one
+ * that literally occurs in real post text -- this is what keeps `?q=` related-term
+ * expansion grounded instead of an LLM inventing synonyms out of thin air.
+ */
+export function topCorpusTerms(db: Database.Database, postLimit = 500, termLimit = 150): string[] {
+  const posts = db
+    .prepare(`select text from posts order by posted_at desc limit ?`)
+    .all(postLimit) as { text: string }[];
+
+  const counts = new Map<string, number>();
+  for (const post of posts) {
+    for (const term of new Set(ngrams(post.text))) {
+      counts.set(term, (counts.get(term) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, termLimit)
+    .map(([term]) => term);
 }
 
 export async function runDetect(db: Database.Database): Promise<number> {

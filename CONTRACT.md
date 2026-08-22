@@ -75,7 +75,8 @@ authoritative as a cited one.
 ```
 GET /api/health                    -> { ok, records_extracted, last_ingest_at }
 GET /api/trends                    -> { trends: Trend[] }                 ranked by score desc
-GET /api/trends?q=<term>           -> { query, matched_posts, trends: Trend[], findings: Finding[], posts: Post[] }
+GET /api/trends?q=<term>           -> { query, matched_posts, trends: Trend[], findings: Finding[],
+                                         posts: Post[], related: Trend[] }
                                        real-time burst detection scoped to posts whose text
                                        matches <term> (case-insensitive substring, any
                                        source_type). Computed on the fly, not written to the
@@ -85,6 +86,27 @@ GET /api/trends?q=<term>           -> { query, matched_posts, trends: Trend[], f
                                        still MUST be a verbatim substring of the cited post's
                                        text. matched_posts is the honest total before ranking;
                                        0 means say so, never fabricate a result.
+                                       APPROVED EXTENSION (2026-08-22, backend agent, item 23):
+                                       `related` is grounded related-term expansion, same Trend
+                                       shape as `trends`. Not hardcoded synonyms — one cheap
+                                       Anthropic call (claude-haiku-4-5-20251001) is given <term>
+                                       plus a bounded list of real n-gram terms that actually
+                                       occur in the live corpus (src/detect/burst.ts's
+                                       topCorpusTerms, capped ~150 by frequency over the most
+                                       recent posts) and may ONLY select from that list — it can
+                                       never invent a term, so every related result names
+                                       something a real post actually said. Each selected term
+                                       gets its own real recent/prior/score computed the same way
+                                       as the main scoped search (src/api/routes.ts's
+                                       computeTrendForTerm), and any finding it grounds follows
+                                       the identical verbatim-quote rule and is folded into the
+                                       same `findings` array. Additive only: missing
+                                       ANTHROPIC_API_KEY, an LLM error, or zero picks all resolve
+                                       to `related: []` — this never blocks or degrades the main
+                                       `trends`/`findings`/`posts` result, including the
+                                       zero-matched-posts case (related can still be non-empty
+                                       even when `matched_posts` is 0, since it draws from the
+                                       whole corpus, not just posts containing <term> verbatim).
 GET /api/trends/:id                -> { trend, findings, posts, timeline: Array<{ date, count }> }
                                        timeline is a daily count of matching posts across the
                                        trend's window (window_start..window_end), computed from
