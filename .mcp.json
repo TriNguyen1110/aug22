@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "port-us": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://mcp.us.port.io/v1",
+        "--header",
+        "x-read-only-mode: 0"
+      ]
+    }
+  }
+}

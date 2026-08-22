@@ -16,7 +16,10 @@
     "cite": "node tools/cite-check.mjs",
     "cite:urls": "node tools/cite-check.mjs --urls",
     "shot": "node tools/screenshot.mjs",
-    "weblogs": "node tools/weblogs.mjs"
+    "weblogs": "node tools/weblogs.mjs",
+    "test:backend": "node --test tests/backend.flows.test.mjs",
+    "test:frontend": "node --test tests/frontend.flows.test.mjs",
+    "test": "npm run test:backend && npm run test:frontend"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

@@ -1,1 +1,15 @@
 ts	kind	id	value	owner	scope	note
+H+0.1	item	backend-v1	review	backend	DATA	schema+seed+detect+API routes+bright data ingest module, committed 974e79c
+H+0.1	item	frontend-v1	review	frontend	SCREEN	trends/competitors/monitoring pages + home, committed 974e79c
+H+0.2	fact	records.posts	8	verifier	DATA	from data/app.db, matches /api/health records_extracted
+H+0.2	fact	quote.check	clean	verifier	DATA	8/8 findings quote verbatim in posts.text, no orphan post_id
+H+0.2	fact	smoke.data	14/14 passed	verifier	DATA	npm run smoke clean, health/trends/competitors/monitoring routes ok
+H+0.2	item	backend-v1	done	backend	DATA	all 5 DATA checks pass: quotes verbatim, post_id valid, trend scores reproduce (41/3=13.67, 12/9=1.33, 8/2=4), records_extracted=8, smoke 14/14
+H+0.2	item	08	backlog	backend	DATA	add a naive-vs-brightdata comparison endpoint: run one uncached plain fetch against a target subreddit, report bytes+records found vs bright data ingest record count, for /api/health or a new /api/pipeline-health
+H+0.2	item	09	backlog	frontend	SCREEN	render the naive-vs-brightdata comparison from item 08 as a visible section on the home page, real numbers not copy
+H+0.3	fact	weblogs	clean	verifier	SCREEN	6 routes checked (/,/trends,/trends/seed-t1,/competitors,/competitors/co-linear,/monitoring), 0 console errors, 0 failed requests
+H+0.3	fact	shot	12/12 ok	verifier	SCREEN	both viewports (1280x800, 390x844) x 6 routes rendered real content, no empty/error states
+H+0.3	fact	citations.snapshots	3/3 resolve	verifier	SCREEN	linear.app/pricing, asana.com/pricing, linear.app/changelog all 200
+H+0.3	fact	citations.posts	0/8 resolve	verifier	SCREEN	all posts.url are https://example.com/seed/N placeholders (404), known seed-data limitation per CLAUDE.md not a frontend bug
+H+0.3	item	frontend-v1	done	verifier	SCREEN	weblogs clean 6 routes, shot 12/12 real content both viewports, every trend/finding/snapshot citation renders as clickable <a href> to posts.url or snapshot.url, competitor snapshot links resolve 200; seed post URLs are placeholders and will resolve once real ingest replaces them, not blocking
+H+0.3	item	10	backlog	frontend	SCREEN	restyle all pages with Tailwind toward a clean modern-SaaS look (generous whitespace, cards, subtle borders, no raw HTML table border=1), no functional changes

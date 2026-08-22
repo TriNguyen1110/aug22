@@ -119,6 +119,13 @@ not an exception.
 
 ## BOARD.tsv
 
+**Main-session rule:** every time a backend or frontend agent commits a testable slice and
+appends a `review` row, dispatch the verifier agent for that row's scope before treating the
+work as done or moving on. If the verifier kicks it back to `doing`, dispatch the owning
+builder with the fix from `note` and repeat. Never skip straight from a builder's commit to
+"looks done" — that's the exact self-certification the board's role table forbids. This loop
+runs every tick, not just at the end.
+
 All shared state lives in one append-only, tab-separated file. Never edit a line, never rewrite
 the file, only append with `>>`. Agents run in parallel and a rewrite loses whatever another
 agent appended in between. **The last row for a given `kind` + `id` is the current truth.**
