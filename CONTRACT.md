@@ -62,6 +62,16 @@ competitor_snapshots
 ```
 GET /api/health                    -> { ok, records_extracted, last_ingest_at }
 GET /api/trends                    -> { trends: Trend[] }                 ranked by score desc
+GET /api/trends?q=<term>           -> { query, matched_posts, trends: Trend[], findings: Finding[], posts: Post[] }
+                                       real-time burst detection scoped to posts whose text
+                                       matches <term> (case-insensitive substring, any
+                                       source_type). Computed on the fly, not written to the
+                                       `trends` table (that table stays the global unscoped
+                                       view). findings/posts here are generated at request time
+                                       from the matching subset, not pre-seeded — findings.quote
+                                       still MUST be a verbatim substring of the cited post's
+                                       text. matched_posts is the honest total before ranking;
+                                       0 means say so, never fabricate a result.
 GET /api/trends/:id                -> { trend, findings, posts }
 GET /api/competitors                -> { companies: Company[], snapshots: CompetitorSnapshot[] }
 GET /api/competitors/:id           -> { company, snapshots, findings, posts }
