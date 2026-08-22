@@ -52,6 +52,11 @@ test('trends search: q= scopes to matching posts and grounds any findings it ret
   assert.ok(Array.isArray(j.trends));
   assert.ok(Array.isArray(j.findings));
   assert.ok(Array.isArray(j.posts));
+  assert.ok(j.trends.length > 0, 'a single-post match for "onboarding" must still clear the floor and return a trend (floorOn: total / minCount: 1)');
+  assert.ok(
+    j.trends[0].term.includes('onboarding'),
+    `top-ranked scoped trend must be relevant to the query itself, got "${j.trends[0].term}" (relevanceTo tiebreak regression)`,
+  );
   // Burst detection is floored on absolute recent-window count (src/detect/burst.ts);
   // seed post dates are randomized per `npm run seed` run, so whether any term clears
   // the floor for a narrow, single-term-match query varies run to run. Assert the
