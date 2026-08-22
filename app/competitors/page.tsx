@@ -39,44 +39,45 @@ export default async function CompetitorsPage() {
 
   return (
     <main>
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">Competitors</h1>
-      <p className="mt-2 text-slate-600">
+      <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-teal">Landscape</p>
+      <h1 className="font-display text-4xl font-semibold tracking-tight text-[#eef1f0]">Competitors</h1>
+      <p className="mt-3 text-silver">
         Pricing, changelog entries, and public activity for Linear and Asana.
       </p>
-      {error && <p className="mt-6 text-red-600">Could not load competitors: {error}</p>}
-      {!error && companies.length === 0 && <p className="mt-6 text-slate-500">No competitors yet.</p>}
-      <div className="mt-8 space-y-10">
+      {error && <p className="mt-6 text-red-400">Could not load competitors: {error}</p>}
+      {!error && companies.length === 0 && <p className="mt-6 text-silver-dim">No competitors yet.</p>}
+      <div className="mt-10 space-y-12">
         {companies.map((c) => {
           const snaps = snapshots.filter((s) => s.company_id === c.id);
           return (
             <section key={c.id}>
-              <h2 className="text-xl font-semibold text-slate-900">
-                <Link href={`/competitors/${c.id}`} className="text-xl font-semibold">
+              <h2 className="font-display text-2xl font-semibold text-[#eef1f0]">
+                <Link href={`/competitors/${c.id}`} className="font-display text-2xl font-semibold hover:text-teal">
                   {c.name}
                 </Link>{' '}
-                <span className="text-base font-normal text-slate-500">({c.domain})</span>
+                <span className="text-base font-sans font-normal text-silver-dim">({c.domain})</span>
               </h2>
-              {snaps.length === 0 && <p className="mt-2 text-slate-500">No snapshots yet.</p>}
+              {snaps.length === 0 && <p className="mt-2 text-silver-dim">No snapshots yet.</p>}
               {snaps.length > 0 && (
-                <Card className="mt-3 border border-slate-200 shadow-sm">
+                <Card className="glass-card mt-4 bg-transparent">
                   <CardBody className="overflow-x-auto p-0">
                     <table className="w-full border-collapse text-left text-sm">
                       <thead>
-                        <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
-                          <th className="px-5 py-3 font-medium">Type</th>
-                          <th className="px-5 py-3 font-medium">Label</th>
-                          <th className="px-5 py-3 font-medium">Value</th>
-                          <th className="px-5 py-3 font-medium">Source</th>
+                        <tr className="border-b border-silver/10 text-xs uppercase tracking-wide text-silver-dim">
+                          <th className="px-5 py-4 font-medium">Type</th>
+                          <th className="px-5 py-4 font-medium">Label</th>
+                          <th className="px-5 py-4 font-medium">Value</th>
+                          <th className="px-5 py-4 font-medium">Source</th>
                         </tr>
                       </thead>
                       <tbody>
                         {snaps.map((s) => (
-                          <tr key={s.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                            <td className="px-5 py-3 text-slate-700">{s.item_type}</td>
-                            <td className="px-5 py-3 text-slate-700">{s.label}</td>
-                            <td className="px-5 py-3 text-slate-700">{s.value_text}</td>
-                            <td className="px-5 py-3">
-                              <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm">
+                          <tr key={s.id} className="border-b border-silver/5 last:border-0 transition-colors hover:bg-white/[0.03]">
+                            <td className="px-5 py-4 text-silver">{s.item_type}</td>
+                            <td className="px-5 py-4 text-silver">{s.label}</td>
+                            <td className="px-5 py-4 text-silver">{s.value_text}</td>
+                            <td className="px-5 py-4">
+                              <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm text-teal hover:text-teal-dim">
                                 link
                               </Link>
                             </td>

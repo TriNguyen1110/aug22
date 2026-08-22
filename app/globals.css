@@ -2,7 +2,87 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg: #0a0d0c;
+  --bg-raised: #0e1310;
+  --silver: #a9b3af;
+  --silver-dim: #6f7a76;
+  --silver-hair: rgba(169, 179, 175, 0.14);
+  --teal: #2dd4bf;
+  --teal-dim: #1d8f82;
+  --forest: #3f7a56;
+  --forest-bright: #5aa87a;
+}
+
 html,
 body {
-  background-color: #f8fafc;
+  background: var(--bg);
+  color: #dfe6e3;
+}
+
+body {
+  position: relative;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* faint ambient glow, teal + forest, very low intensity */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20% -10%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 40% at 15% 8%, rgba(45, 212, 191, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 90% 20%, rgba(63, 122, 86, 0.07) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 50% 100%, rgba(45, 212, 191, 0.03) 0%, transparent 60%);
+}
+
+#__next,
+main,
+nav {
+  position: relative;
+  z-index: 1;
+}
+
+.font-serif-display {
+  font-family: var(--font-display), Georgia, serif;
+}
+
+.glass-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01));
+  border: 1px solid var(--silver-hair);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 14px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 30px -18px rgba(0, 0, 0, 0.6);
+}
+
+.glass-card:hover {
+  border-color: rgba(45, 212, 191, 0.28);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 40px -18px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(45, 212, 191, 0.05);
+}
+
+.divider-hair {
+  border-color: var(--silver-hair);
+}
+
+.text-accent-teal {
+  color: var(--teal);
+}
+
+.text-accent-forest {
+  color: var(--forest-bright);
+}
+
+.chip-score {
+  background: rgba(45, 212, 191, 0.1);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  color: var(--teal);
+}
+
+::selection {
+  background: rgba(45, 212, 191, 0.25);
 }

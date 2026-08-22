@@ -42,19 +42,20 @@ export default async function MonitoringPage() {
 
   return (
     <main>
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">Monitoring</h1>
-      <p className="mt-2 text-slate-600">How people react to Notion&apos;s own posts.</p>
-      {error && <p className="mt-6 text-red-600">Could not load monitoring data: {error}</p>}
-      {!error && findings.length === 0 && <p className="mt-6 text-slate-500">No findings yet.</p>}
-      <ul className="mt-6 space-y-4">
+      <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-teal">Reception</p>
+      <h1 className="font-display text-4xl font-semibold tracking-tight text-[#eef1f0]">Monitoring</h1>
+      <p className="mt-3 text-silver">How people react to Notion&apos;s own posts.</p>
+      {error && <p className="mt-6 text-red-400">Could not load monitoring data: {error}</p>}
+      {!error && findings.length === 0 && <p className="mt-6 text-silver-dim">No findings yet.</p>}
+      <ul className="mt-8 space-y-4">
         {findings.map((f) => {
           const post = postById.get(f.post_id);
           return (
             <li key={f.id}>
-              <Card className="border border-slate-200 shadow-sm">
+              <Card className="glass-card bg-transparent">
                 <CardBody>
-                  <p className="text-slate-800">{f.claim}</p>
-                  <blockquote className="mt-2 border-l-2 border-slate-300 pl-3 italic text-slate-600">
+                  <p className="text-[#eef1f0]">{f.claim}</p>
+                  <blockquote className="mt-3 border-l-2 border-teal/40 pl-3 italic text-silver">
                     &quot;{f.quote}&quot;
                   </blockquote>
                   {post ? (
@@ -62,12 +63,12 @@ export default async function MonitoringPage() {
                       href={post.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-3 inline-block text-sm"
+                      className="mt-3 inline-block text-sm text-teal hover:text-teal-dim"
                     >
                       Source: {post.platform} / {post.author}
                     </Link>
                   ) : (
-                    <span className="mt-3 inline-block text-sm text-slate-400">
+                    <span className="mt-3 inline-block text-sm text-silver-dim">
                       Source post unavailable
                     </span>
                   )}

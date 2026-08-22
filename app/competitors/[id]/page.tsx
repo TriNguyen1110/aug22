@@ -1,4 +1,5 @@
 import { Card, CardBody, Link } from '@heroui/react';
+import { ArrowLeft } from 'lucide-react';
 
 type Company = {
   id: string;
@@ -63,40 +64,40 @@ export default async function CompetitorDetailPage({ params }: { params: { id: s
 
   return (
     <main>
-      <Link href="/competitors" className="text-sm">
-        &larr; Back to competitors
+      <Link href="/competitors" className="inline-flex items-center gap-1.5 text-sm text-silver hover:text-teal">
+        <ArrowLeft className="h-3.5 w-3.5" /> Back to competitors
       </Link>
-      {error && <p className="mt-6 text-red-600">Could not load company: {error}</p>}
-      {!error && !company && <p className="mt-6 text-slate-500">Company not found.</p>}
+      {error && <p className="mt-6 text-red-400">Could not load company: {error}</p>}
+      {!error && !company && <p className="mt-6 text-silver-dim">Company not found.</p>}
       {company && (
         <>
-          <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-900">
+          <h1 className="mt-5 font-display text-4xl font-semibold tracking-tight text-[#eef1f0]">
             {company.name}
           </h1>
-          <p className="mt-1 text-slate-500">{company.domain}</p>
+          <p className="mt-2 text-silver-dim">{company.domain}</p>
 
-          <h2 className="mt-8 text-xl font-semibold text-slate-900">Snapshots</h2>
-          {snapshots.length === 0 && <p className="mt-2 text-slate-500">No snapshots yet.</p>}
+          <h2 className="mt-10 font-display text-xl font-semibold text-[#eef1f0]">Snapshots</h2>
+          {snapshots.length === 0 && <p className="mt-2 text-silver-dim">No snapshots yet.</p>}
           {snapshots.length > 0 && (
-            <Card className="mt-3 border border-slate-200 shadow-sm">
+            <Card className="glass-card mt-4 bg-transparent">
               <CardBody className="overflow-x-auto p-0">
                 <table className="w-full border-collapse text-left text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
-                      <th className="px-5 py-3 font-medium">Type</th>
-                      <th className="px-5 py-3 font-medium">Label</th>
-                      <th className="px-5 py-3 font-medium">Value</th>
-                      <th className="px-5 py-3 font-medium">Source</th>
+                    <tr className="border-b border-silver/10 text-xs uppercase tracking-wide text-silver-dim">
+                      <th className="px-5 py-4 font-medium">Type</th>
+                      <th className="px-5 py-4 font-medium">Label</th>
+                      <th className="px-5 py-4 font-medium">Value</th>
+                      <th className="px-5 py-4 font-medium">Source</th>
                     </tr>
                   </thead>
                   <tbody>
                     {snapshots.map((s) => (
-                      <tr key={s.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                        <td className="px-5 py-3 text-slate-700">{s.item_type}</td>
-                        <td className="px-5 py-3 text-slate-700">{s.label}</td>
-                        <td className="px-5 py-3 text-slate-700">{s.value_text}</td>
-                        <td className="px-5 py-3">
-                          <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm">
+                      <tr key={s.id} className="border-b border-silver/5 last:border-0 transition-colors hover:bg-white/[0.03]">
+                        <td className="px-5 py-4 text-silver">{s.item_type}</td>
+                        <td className="px-5 py-4 text-silver">{s.label}</td>
+                        <td className="px-5 py-4 text-silver">{s.value_text}</td>
+                        <td className="px-5 py-4">
+                          <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm text-teal hover:text-teal-dim">
                             link
                           </Link>
                         </td>
@@ -108,17 +109,17 @@ export default async function CompetitorDetailPage({ params }: { params: { id: s
             </Card>
           )}
 
-          <h2 className="mt-8 text-xl font-semibold text-slate-900">Findings</h2>
-          {findings.length === 0 && <p className="mt-2 text-slate-500">No findings yet.</p>}
-          <ul className="mt-4 space-y-4">
+          <h2 className="mt-10 font-display text-xl font-semibold text-[#eef1f0]">Findings</h2>
+          {findings.length === 0 && <p className="mt-2 text-silver-dim">No findings yet.</p>}
+          <ul className="mt-5 space-y-4">
             {findings.map((f) => {
               const post = postById.get(f.post_id);
               return (
                 <li key={f.id}>
-                  <Card className="border border-slate-200 shadow-sm">
+                  <Card className="glass-card bg-transparent">
                     <CardBody>
-                      <p className="text-slate-800">{f.claim}</p>
-                      <blockquote className="mt-2 border-l-2 border-slate-300 pl-3 italic text-slate-600">
+                      <p className="text-[#eef1f0]">{f.claim}</p>
+                      <blockquote className="mt-3 border-l-2 border-teal/40 pl-3 italic text-silver">
                         &quot;{f.quote}&quot;
                       </blockquote>
                       {post ? (
@@ -126,12 +127,12 @@ export default async function CompetitorDetailPage({ params }: { params: { id: s
                           href={post.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="mt-3 inline-block text-sm"
+                          className="mt-3 inline-block text-sm text-teal hover:text-teal-dim"
                         >
                           Source: {post.platform} / {post.author}
                         </Link>
                       ) : (
-                        <span className="mt-3 inline-block text-sm text-slate-400">
+                        <span className="mt-3 inline-block text-sm text-silver-dim">
                           Source post unavailable
                         </span>
                       )}

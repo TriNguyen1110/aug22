@@ -31,36 +31,37 @@ export default async function TrendsPage() {
 
   return (
     <main>
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">Trends</h1>
-      <p className="mt-2 text-slate-600">
+      <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-teal">Discourse</p>
+      <h1 className="font-display text-4xl font-semibold tracking-tight text-[#eef1f0]">Trends</h1>
+      <p className="mt-3 text-silver">
         Burst-detected discourse, ranked by recent-count / prior-count.
       </p>
-      {error && <p className="mt-6 text-red-600">Could not load trends: {error}</p>}
-      {!error && sorted.length === 0 && <p className="mt-6 text-slate-500">No trends yet.</p>}
+      {error && <p className="mt-6 text-red-400">Could not load trends: {error}</p>}
+      {!error && sorted.length === 0 && <p className="mt-6 text-silver-dim">No trends yet.</p>}
       {sorted.length > 0 && (
-        <Card className="mt-6 border border-slate-200 shadow-sm">
+        <Card className="glass-card mt-8 bg-transparent">
           <CardBody className="overflow-x-auto p-0">
             <table className="w-full border-collapse text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
-                  <th className="px-5 py-3 font-medium">Term</th>
-                  <th className="px-5 py-3 font-medium">Recent count</th>
-                  <th className="px-5 py-3 font-medium">Prior count</th>
-                  <th className="px-5 py-3 font-medium">Score</th>
+                <tr className="border-b border-silver/10 text-xs uppercase tracking-wide text-silver-dim">
+                  <th className="px-5 py-4 font-medium">Term</th>
+                  <th className="px-5 py-4 font-medium">Recent count</th>
+                  <th className="px-5 py-4 font-medium">Prior count</th>
+                  <th className="px-5 py-4 font-medium">Score</th>
                 </tr>
               </thead>
               <tbody>
                 {sorted.map((t) => (
-                  <tr key={t.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                    <td className="px-5 py-3">
-                      <Link href={`/trends/${t.id}`} className="font-medium">
+                  <tr key={t.id} className="border-b border-silver/5 last:border-0 transition-colors hover:bg-white/[0.03]">
+                    <td className="px-5 py-4">
+                      <Link href={`/trends/${t.id}`} className="font-medium text-[#eef1f0] hover:text-teal">
                         {t.term}
                       </Link>
                     </td>
-                    <td className="px-5 py-3 text-slate-700">{t.recent_count}</td>
-                    <td className="px-5 py-3 text-slate-700">{t.prior_count}</td>
-                    <td className="px-5 py-3">
-                      <Chip size="sm" variant="flat" color="primary">
+                    <td className="px-5 py-4 text-silver">{t.recent_count}</td>
+                    <td className="px-5 py-4 text-silver">{t.prior_count}</td>
+                    <td className="px-5 py-4">
+                      <Chip size="sm" variant="flat" className="chip-score">
                         {t.score.toFixed(2)}
                       </Chip>
                     </td>
