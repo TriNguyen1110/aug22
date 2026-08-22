@@ -20,7 +20,7 @@ const body = Inter({
 
 export const metadata = {
   title: 'Meridian',
-  description: 'Trend, competitor, and monitoring dashboard for Notion',
+  description: 'Trend, competitor, and monitoring dashboard for Anthropic',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

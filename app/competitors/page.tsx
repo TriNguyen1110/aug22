@@ -63,7 +63,7 @@ export default async function CompetitorsPage({
           Competitors
         </h1>
         <p className="mt-4 max-w-2xl text-lg leading-relaxed text-silver">
-          Pricing, changelog entries, and public activity for Linear and Asana.
+          Pricing, activity, and sentiment for OpenAI and other major AI labs.
         </p>
       </section>
 

@@ -50,7 +50,7 @@ export default async function MonitoringPage() {
           Monitoring
         </h1>
         <p className="mt-4 max-w-2xl text-lg leading-relaxed text-silver">
-          How people react to Notion&apos;s own posts.
+          How people react to Anthropic&apos;s own posts and products.
         </p>
       </section>
       {error && <p className="text-red-400">Could not load monitoring data: {error}</p>}

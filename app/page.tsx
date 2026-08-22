@@ -31,19 +31,19 @@ const cards = [
     title: 'Trends',
     icon: TrendingUp,
     description:
-      'Burst-detected discourse on r/Notion, r/SaaS, r/productivity, r/Linear, and r/asana.',
+      'Burst-detected AI/tech discourse from r/singularity and beyond.',
   },
   {
     href: '/competitors',
     title: 'Competitors',
     icon: Building2,
-    description: 'Pricing, changelog, and activity for Linear and Asana.',
+    description: 'Pricing, activity, and sentiment for OpenAI and other major labs.',
   },
   {
     href: '/monitoring',
     title: 'Monitoring',
     icon: Radio,
-    description: "How people react to Notion's own posts.",
+    description: "How people react to Anthropic's own posts and products.",
   },
 ];
 
@@ -62,8 +62,9 @@ export default async function HomePage() {
           Meridian
         </h1>
         <p className="mt-4 max-w-2xl text-lg leading-relaxed text-silver">
-          A statistics-first view of what people are saying about Notion, Linear, and
-          Asana &mdash; every trend and finding traces back to a real, cited post.
+          A statistics-first view of what people are saying about Anthropic, OpenAI,
+          and the broader AI/agents discourse &mdash; every trend and finding traces
+          back to a real, cited post.
         </p>
       </section>
 
