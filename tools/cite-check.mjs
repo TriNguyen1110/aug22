@@ -8,19 +8,19 @@
  *
  * Run this before recording anything. A fabricated quote ends the demo.
  */
-import pg from 'pg';
+import Database from 'better-sqlite3';
 
 const checkUrls = process.argv.includes('--urls');
-const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-await client.connect();
+const dbPath = process.env.DB_PATH ?? './data/app.db';
+const db = new Database(dbPath, { fileMustExist: true });
 
-const { rows } = await client.query(`
+const rows = db.prepare(`
   select f.id, f.quote, f.claim, p.id as post_id, p.text, p.url
   from findings f
   left join posts p on p.id = f.post_id
   order by f.id
-`);
-await client.end();
+`).all();
+db.close();
 
 if (rows.length === 0) {
   console.error('FAIL  no findings to check. Detection produced nothing.');

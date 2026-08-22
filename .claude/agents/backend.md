@@ -14,7 +14,8 @@ in parallel, so if it genuinely must change, stop and say so rather than editing
 
 Rules:
 
-- Bun, Prisma, Zod at every external boundary. Validate scraped payloads before they touch the DB.
+- Bun, `better-sqlite3` (single file at `DB_PATH`, default `./data/app.db`), Zod at every
+  external boundary. Validate scraped payloads before they touch the DB.
 - Every successful fetch is written to `./data/raw/` before parsing. Caching is not optional,
   it is what makes the demo survive bad wifi.
 - Assert record counts. `records_extracted > 0` after any ingest, and fail loudly rather than

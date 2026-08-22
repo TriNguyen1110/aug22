@@ -32,8 +32,13 @@ then dashboard polish. Never cut the demo video, the Port workspace, or the auto
 
 ## Stack
 
-Bun, not npm. TypeScript. Next for the dashboard. Postgres via Prisma, PGlite for tests.
-Zod at every external boundary. OpenTelemetry to SigNoz.
+Bun, not npm (tools/ still run under `node` for now, pre-existing). TypeScript. Next for the
+dashboard. SQLite via `better-sqlite3`, single file at `./data/app.db` (path from `DB_PATH`).
+No Postgres, no Prisma, no separate test DB — one file, one day. Zod at every external
+boundary. OpenTelemetry to SigNoz, guarded on `SIGNOZ_OTLP_ENDPOINT` being set.
+
+Three use cases, one schema, three dashboard pages: `/trends`, `/competitors`, `/monitoring`.
+See `docs/USE_CASES.md` for the why and the demo target (Notion vs Linear/Asana).
 
 ## Commands
 
@@ -52,14 +57,14 @@ bun run ingest -- --platform reddit --cached   # never hit the network during a 
 ```
 
 **These tools are inert until the schema is applied.** They are written against `CONTRACT.md`
-and expect `DATABASE_URL` plus the `posts`, `trends`, and `findings` tables to exist.
+and expect `DB_PATH` (default `./data/app.db`) plus the tables in `CONTRACT.md` to exist.
 
 Order of operations. Do not run a tool before its prerequisite:
 
 | Step | Then this works |
 |---|---|
 | `npm i && npx playwright install chromium` | `shot`, `weblogs` |
-| Apply the `CONTRACT.md` schema, set `DATABASE_URL` | `seed`, `smoke:db`, `cite` |
+| Apply the `CONTRACT.md` schema (`src/db/migrate.ts`) | `seed`, `smoke:db`, `cite` |
 | API routes exist and dev server is running | `smoke`, `weblogs` |
 
 If a tool fails because its prerequisite is missing, say so and move on. Do not try to fix
@@ -69,7 +74,7 @@ to the tool rather than writing it ad hoc.
 Once live: `npm run smoke` after any change to ingest, detect, or the API. `npm run cite`
 before anything goes on screen or into the video.
 
-Storage note: Port is a project catalog, not a datastore. Application data lives in Postgres.
+Storage note: Port is a project catalog, not a datastore. Application data lives in SQLite.
 
 ## Bright Data Scraper Studio
 
@@ -86,14 +91,27 @@ Always cache            every successful fetch is written to disk before parsing
 Scraper settings live in this file so they are reused automatically:
 
 ```
-# fill in after the Wednesday dry run
-collector_id:
-date_range_param:
-records_per_call:
-auth_method:
-retry_policy:
-auto_repair_trigger:
+collector_id:        reddit_posts   # Bright Data's built-in Reddit collector, verify at first run
+date_range_param:    time_filter    # 'week' for trend windows, 'month' for competitor/monitoring
+records_per_call:    100
+auth_method:         BRIGHTDATA_API_TOKEN bearer, no cookie needed for the public collector
+retry_policy:        1 retry, then treat as a scrape-doctor case, never loop unbounded
+auto_repair_trigger: records_extracted == 0 on a 200 response, or a required field comes back null
+                      across the whole batch (selector/shape drift)
 ```
+
+Demo targets (see `docs/USE_CASES.md`), one subreddit per row is the collector's `subreddit` param:
+
+```
+trends       r/SaaS, r/productivity, r/Notion     source_type=trend,      company_id=null
+competitor   r/linear                             source_type=competitor, company=Linear
+competitor   r/asana                               source_type=competitor, company=Asana
+own          r/Notion                              source_type=own,        company=Notion
+```
+
+Competitor pricing/changelog snapshots are a plain fetch of the public pricing/changelog page
+(not a Bright Data collector), written to `competitor_snapshots`. Cache the raw HTML/JSON to
+`./data/raw/` the same as any other fetch.
 
 When a scrape returns fewer records than expected, do not retry blindly. Use the
 `scrape-doctor` agent. A 200 response with zero records is the expected failure mode here,

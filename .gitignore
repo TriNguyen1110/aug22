@@ -4,3 +4,7 @@ node_modules/
 data/raw/
 *.log
 .DS_Store
+.next/
+data/*.db
+data/*.db-shm
+data/*.db-wal

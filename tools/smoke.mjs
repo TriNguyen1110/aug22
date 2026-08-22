@@ -6,9 +6,10 @@
  *   node tools/smoke.mjs                 # db + api
  *   node tools/smoke.mjs --skip-api      # db only, before the server exists
  */
-import pg from 'pg';
+import Database from 'better-sqlite3';
 
 const BASE = process.env.SMOKE_BASE ?? 'http://localhost:3000';
+const dbPath = process.env.DB_PATH ?? './data/app.db';
 const skipApi = process.argv.includes('--skip-api');
 const results = [];
 
@@ -23,43 +24,43 @@ const check = async (name, fn) => {
   }
 };
 
-const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-
+let db;
 await check('db connects', async () => {
-  await client.connect();
-  const { rows } = await client.query('select current_database() as db');
-  return rows[0].db;
+  db = new Database(dbPath, { fileMustExist: true });
+  return dbPath;
 });
 
-for (const t of ['posts', 'trends', 'findings']) {
-  await check(`table ${t} exists`, async () => {
-    const { rows } = await client.query('select to_regclass($1) as reg', [t]);
-    if (!rows[0].reg) throw new Error('missing');
-    return 'ok';
+if (db) {
+  for (const t of ['companies', 'posts', 'trends', 'findings', 'competitor_snapshots']) {
+    await check(`table ${t} exists`, async () => {
+      const row = db.prepare(`select name from sqlite_master where type='table' and name=?`).get(t);
+      if (!row) throw new Error('missing');
+      return 'ok';
+    });
+  }
+
+  await check('posts has rows', async () => {
+    const { n } = db.prepare('select count(*) as n from posts').get();
+    if (n === 0) throw new Error('0 rows, ingest produced nothing');
+    return `${n} rows`;
   });
+
+  await check('findings has rows', async () => {
+    const { n } = db.prepare('select count(*) as n from findings').get();
+    if (n === 0) throw new Error('0 rows, detection produced nothing');
+    return `${n} rows`;
+  });
+
+  await check('no orphan findings', async () => {
+    const { n } = db.prepare(`
+      select count(*) as n from findings f left join posts p on p.id = f.post_id where p.id is null
+    `).get();
+    if (n > 0) throw new Error(`${n} findings cite a missing post`);
+    return 'all cite real posts';
+  });
+
+  db.close();
 }
-
-await check('posts has rows', async () => {
-  const { rows } = await client.query('select count(*)::int n from posts');
-  if (rows[0].n === 0) throw new Error('0 rows, ingest produced nothing');
-  return `${rows[0].n} rows`;
-});
-
-await check('findings has rows', async () => {
-  const { rows } = await client.query('select count(*)::int n from findings');
-  if (rows[0].n === 0) throw new Error('0 rows, detection produced nothing');
-  return `${rows[0].n} rows`;
-});
-
-await check('no orphan findings', async () => {
-  const { rows } = await client.query(
-    'select count(*)::int n from findings f left join posts p on p.id = f.post_id where p.id is null',
-  );
-  if (rows[0].n > 0) throw new Error(`${rows[0].n} findings cite a missing post`);
-  return 'all cite real posts';
-});
-
-await client.end();
 
 if (!skipApi) {
   const get = async (path) => {
@@ -91,6 +92,20 @@ if (!skipApi) {
       return `${j.findings.length} findings`;
     });
   }
+
+  await check('GET /api/competitors', async () => {
+    const j = await get('/api/competitors');
+    if (!Array.isArray(j.companies)) throw new Error('companies is not an array');
+    if (j.companies.length === 0) throw new Error('empty, no competitors loaded');
+    return `${j.companies.length} companies`;
+  });
+
+  await check('GET /api/monitoring', async () => {
+    const j = await get('/api/monitoring');
+    if (!Array.isArray(j.posts)) throw new Error('posts is not an array');
+    if (j.posts.length === 0) throw new Error('empty, no own-company posts loaded');
+    return `${j.posts.length} posts`;
+  });
 }
 
 const failed = results.filter((r) => !r.ok);
