@@ -223,6 +223,52 @@ test('chat flow: a question with no matching data returns an honest empty answer
   assert.equal(j.citations.length, 0, 'no matching posts means no citations, not a fabricated one');
 });
 
+test('chat flow: answer text never asserts a claim whose citation was dropped for failing verification', async () => {
+  // Regression for item 19: a real dogfooding run against OpenAI Codex/AI-agent posts
+  // showed the model narrating 5 distinct claims each tagged with a POST_ID in the
+  // free-text `answer`, while server-side verification dropped 4 of the 5 citations
+  // as ungrounded. The `citations` array was correctly cleaned but the prose was not,
+  // so a reader saw 5 confidently-stated claims backed by only 1 real citation. This
+  // test asserts every post-id-shaped token that appears anywhere in the final
+  // `answer` string is also present as a `post_id` in the final `citations` array —
+  // no orphaned references, regardless of how many the model originally claimed.
+  const db = await import('better-sqlite3');
+  const Database = db.default;
+  const conn = new Database(process.env.DB_PATH ?? './data/app.db', { readonly: true });
+  const allPostIds = conn.prepare('select id from posts').all().map((r) => r.id);
+  conn.close();
+
+  const questions = [
+    'What are people saying about OpenAI Codex?',
+    'What are people saying about Claude Code and AI agents?',
+  ];
+
+  let checked = false;
+  for (const question of questions) {
+    const res = await fetch(new URL('/api/chat', BASE), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    assert.equal(res.ok, true, `chat request failed: ${res.status}`);
+    const j = await res.json();
+    assert.ok(typeof j.answer === 'string', 'answer must be a string');
+    assert.ok(Array.isArray(j.citations), 'citations must be an array');
+
+    const verifiedIds = new Set(j.citations.map((c) => c.post_id));
+    for (const id of allPostIds) {
+      if (j.answer.includes(id)) {
+        assert.ok(
+          verifiedIds.has(id),
+          `answer references post_id "${id}" but it is not present in the final citations array — orphaned/hallucinated reference leaked into user-facing text`,
+        );
+      }
+    }
+    checked = true;
+  }
+  assert.ok(checked, 'at least one question must have been exercised');
+});
+
 test('no main-flow route requires auth, a session, or credentials', async () => {
   for (const path of ['/api/health', '/api/trends', '/api/competitors', '/api/monitoring']) {
     const res = await fetch(new URL(path, BASE));

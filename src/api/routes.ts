@@ -588,11 +588,50 @@ ${contextBlock}`;
       if (!post || !post.text.includes(c.quote)) continue; // ungrounded claim, drop rather than pass through
       citations.push({ post_id: c.post_id, quote: c.quote, url: post.url });
     }
+    const claimedCount = (parsedResponse.citations ?? []).length;
     span.setAttr('citations_verified', citations.length);
-    span.setAttr('citations_claimed', (parsedResponse.citations ?? []).length);
+    span.setAttr('citations_claimed', claimedCount);
+
+    const modelAnswer = parsedResponse.answer ?? "I don't have data on that.";
+    const verifiedIds = new Set(citations.map((c) => c.post_id));
+
+    // Defense in depth part 2: even if every *returned* citation verified fine, the
+    // free-text `answer` string is model output too and can reference a POST_ID that
+    // was never in its own citations array, or that failed verification above. Scan
+    // the answer for any known candidate post_id and confirm it only ever names ids
+    // that survived verification. Any mismatch means the prose is asserting something
+    // we can't back — never let that leak to the user un-redacted.
+    let answerReferencesUnverifiedId = false;
+    for (const id of postsById.keys()) {
+      if (modelAnswer.includes(id) && !verifiedIds.has(id)) {
+        answerReferencesUnverifiedId = true;
+        break;
+      }
+    }
+    const someCitationsDropped = citations.length < claimedCount;
+
+    let answer = modelAnswer;
+    if (someCitationsDropped || answerReferencesUnverifiedId) {
+      span.setAttr('failure_reason', 'model answer referenced unverified/dropped citations, reconstructed safe answer');
+      if (citations.length === 0) {
+        answer = `I don't have verifiably grounded data to answer that. The model's response could not be confirmed against real post text, so I'm not showing it.`;
+      } else {
+        const verifiedLines = citations.map((c) => `"${c.quote}" (${c.post_id})`).join('; ');
+        answer = `Here is what I can verify from real posts: ${verifiedLines}. Some of the model's other claims could not be confirmed against real post text and have been removed.`;
+      }
+    }
+
+    // The `citations` array is machine-readable, but the user reads `answer`. Write
+    // the sources into the answer text itself as an explicit "Sources:" section so
+    // provenance is visible even if a caller only renders `answer` and ignores the
+    // structured array — never rely on the frontend to surface grounding on its own.
+    if (citations.length > 0) {
+      const sourceLines = citations.map((c) => `- ${c.post_id}: ${c.url}`).join('\n');
+      answer = `${answer}\n\nSources:\n${sourceLines}`;
+    }
 
     return {
-      answer: parsedResponse.answer ?? "I don't have data on that.",
+      answer,
       citations,
       brightdata,
     };
