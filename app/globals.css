@@ -83,6 +83,15 @@ nav {
   color: var(--teal);
 }
 
+/* muted, deliberately lower visual weight than .chip-score: marks illustrative
+   seed values (market_share/size/niche not backed by a real snapshot) so they
+   never look as authoritative as cited/grounded data */
+.chip-est {
+  background: rgba(169, 179, 175, 0.08);
+  border: 1px solid rgba(169, 179, 175, 0.2);
+  color: var(--silver-dim);
+}
+
 ::selection {
   background: rgba(45, 212, 191, 0.25);
 }

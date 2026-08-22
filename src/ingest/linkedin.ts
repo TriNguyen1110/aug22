@@ -1,0 +1,230 @@
+/**
+ * Bright Data LinkedIn company-overview ingest. Terminal only, same discipline as
+ * src/ingest/reddit.ts: fetch -> cache raw HTML to ./data/raw/ BEFORE parsing ->
+ * validate with Zod -> upsert -> assert records_extracted > 0 or throw.
+ *
+ * Bright Data's Direct API (Web Unlocker, Bearer token, POST
+ * https://api.brightdata.com/request with { zone: 'web_unlocker1', url, format: 'raw',
+ * country: 'us' }) works for LinkedIn's public company *overview* page and returns a
+ * real server-rendered page containing a `"description":"..."` field with the
+ * company's real About text. The `/posts/` sub-page is blocked by LinkedIn
+ * ("Forbidden. Use only company name in the URL") -- only the overview page is
+ * fetched, never posts.
+ *
+ * Slug mapping below was verified live against the real API (not guessed blind):
+ * a few slugs that look reasonable (e.g. "linear", "clickup", "coda", "monday-com",
+ * "plaid") either 200'd with an *unrelated* company's real description (name
+ * collision -- "linear" is a MEP design-software company, not the issue tracker) or
+ * landed on LinkedIn's authwall (small noindex page, no description field at all).
+ * Those are corrected to the verified-correct slug (linearapp, clickup-app, codainc)
+ * or dropped entirely (monday, plaid) rather than fabricating a snapshot from the
+ * wrong company or an empty page.
+ *
+ * Usage:
+ *   bun run src/ingest/linkedin.ts             # real fetch, needs BRIGHTDATA_API_TOKEN
+ *   bun run src/ingest/linkedin.ts --cached     # replay most recent cached HTML per slug
+ */
+import { z } from 'zod';
+import { mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { migrate } from '../db/migrate';
+import { withSpan } from '../otel';
+
+const RAW_DIR = './data/raw';
+const PLATFORM = 'linkedin';
+const BRIGHTDATA_ZONE = 'web_unlocker1';
+
+// company_id -> LinkedIn company slug, verified live against the real API (see file
+// header). Companies with no confidently-correct slug (Monday, Plaid -- both land on
+// an authwall page with no description field) are omitted rather than guessed.
+const COMPANY_SLUGS: Record<string, string> = {
+  'co-notion': 'notionhq',
+  'co-linear': 'linearapp',
+  'co-asana': 'asana',
+  'co-clickup': 'clickup-app',
+  'co-coda': 'codainc',
+  'co-stripe': 'stripe',
+  'co-brex': 'brexhq',
+};
+
+const ProfileRecord = z.object({
+  company_id: z.string(),
+  slug: z.string(),
+  url: z.string(),
+  description: z.string().min(1),
+});
+type ProfileRecord = z.infer<typeof ProfileRecord>;
+
+function hasApiConfig(): boolean {
+  return Boolean(process.env.BRIGHTDATA_API_TOKEN);
+}
+
+function cachePath(slug: string, iso: string) {
+  return join(RAW_DIR, `${PLATFORM}-${slug}-${iso.slice(0, 10)}.html`);
+}
+
+/**
+ * Pulls the real `"description":"..."` field out of a LinkedIn company overview
+ * page's embedded JSON. Simple string extraction, not a full HTML/JSON parser --
+ * the field is a single JS-string-escaped value inside a `<code>` blob, so unescaping
+ * it as a JSON string literal is the correct and sufficient approach here.
+ */
+function extractDescription(html: string): string | null {
+  const m = html.match(/"description":"((?:[^"\\]|\\.)*)"/);
+  if (!m) return null;
+  try {
+    const decoded = JSON.parse(`"${m[1]}"`);
+    return typeof decoded === 'string' && decoded.trim().length > 0 ? decoded.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches one company's LinkedIn overview page through Bright Data's Direct API.
+ * `country: 'us'` is required -- omitting it gets a 200 with an empty body from
+ * Bright Data's default exit-node selection, same failure mode documented in
+ * src/ingest/reddit.ts.
+ */
+async function fetchOverviewViaBrightData(slug: string): Promise<{ html: string | null; error?: string }> {
+  const token = process.env.BRIGHTDATA_API_TOKEN;
+  const url = `https://www.linkedin.com/company/${slug}`;
+  try {
+    const res = await fetch('https://api.brightdata.com/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ zone: BRIGHTDATA_ZONE, url, format: 'raw', country: 'us' }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      return { html: null, error: `${slug}: HTTP ${res.status} ${detail.slice(0, 200)}` };
+    }
+    const html = await res.text();
+    if (!html) {
+      return { html: null, error: `${slug}: 200 with empty body (blocked or JS shell)` };
+    }
+    return { html };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { html: null, error: `${slug}: ${reason}` };
+  }
+}
+
+function loadCachedHtml(slug: string): string | null {
+  mkdirSync(RAW_DIR, { recursive: true });
+  const files = readdirSync(RAW_DIR)
+    .filter((f) => f.startsWith(`${PLATFORM}-${slug}-`) && f.endsWith('.html'))
+    .sort()
+    .reverse();
+  if (files.length === 0) return null;
+  return readFileSync(join(RAW_DIR, files[0]), 'utf-8');
+}
+
+function upsertSnapshot(db: ReturnType<typeof migrate>, rec: ProfileRecord) {
+  const capturedAt = new Date().toISOString();
+  db.prepare(
+    `insert into competitor_snapshots (id, company_id, item_type, label, value_text, url, captured_at)
+     values (@id, @company_id, 'profile', 'LinkedIn overview', @value_text, @url, @captured_at)
+     on conflict(id) do update set value_text = excluded.value_text, url = excluded.url, captured_at = excluded.captured_at`,
+  ).run({
+    id: `snap-linkedin-profile-${rec.company_id}`,
+    company_id: rec.company_id,
+    value_text: rec.description,
+    url: rec.url,
+    captured_at: capturedAt,
+  });
+}
+
+export async function ingestLinkedin(opts: { cached: boolean }) {
+  return withSpan('ingest.linkedin', async (span) => {
+    span.setAttr('platform', PLATFORM);
+    span.setAttr('mode', opts.cached ? 'cached' : 'live');
+
+    if (!opts.cached && !hasApiConfig()) {
+      // Non-fatal per CLAUDE.md: missing token skips rather than crashes.
+      console.log('[ingest:linkedin] BRIGHTDATA_API_TOKEN not set. Skipping live fetch.');
+      console.log('[ingest:linkedin] Run with --cached to replay cached HTML, or set the token in .env.local.');
+      span.setAttr('failure_reason', 'no API token, skipped');
+      span.setRecordCount(0);
+      return { skipped: true, records_extracted: 0 };
+    }
+
+    const db = migrate();
+    const errors: string[] = [];
+    let written = 0;
+
+    for (const [companyId, slug] of Object.entries(COMPANY_SLUGS)) {
+      let html: string | null;
+      let cachePathUsed: string | null = null;
+
+      if (opts.cached) {
+        html = loadCachedHtml(slug);
+        if (!html) {
+          errors.push(`${slug}: no cached HTML in ${RAW_DIR}`);
+          continue;
+        }
+      } else {
+        const result = await fetchOverviewViaBrightData(slug);
+        if (result.error || !result.html) {
+          errors.push(result.error ?? `${slug}: no html returned`);
+          continue;
+        }
+        html = result.html;
+        const iso = new Date().toISOString();
+        cachePathUsed = cachePath(slug, iso);
+        mkdirSync(RAW_DIR, { recursive: true });
+        // Cache BEFORE parsing, so a bad payload is still recoverable from disk.
+        writeFileSync(cachePathUsed, html);
+      }
+
+      const description = extractDescription(html);
+      if (!description) {
+        errors.push(`${slug}: no "description" field found in overview page (authwall or layout change)`);
+        continue;
+      }
+
+      const parsed = ProfileRecord.safeParse({
+        company_id: companyId,
+        slug,
+        url: `https://www.linkedin.com/company/${slug}`,
+        description,
+      });
+      if (!parsed.success) {
+        errors.push(`${slug}: schema validation failed: ${parsed.error.issues.slice(0, 2).map((i) => i.message).join('; ')}`);
+        continue;
+      }
+
+      upsertSnapshot(db, parsed.data);
+      written += 1;
+    }
+    db.close();
+
+    span.setRecordCount(written);
+    if (errors.length) span.setAttr('errors', errors.join(' | ').slice(0, 500));
+
+    if (written === 0) {
+      // Grounding rule: a 200 with zero usable rows is a failure, not a warning.
+      span.setAttr('failure_reason', 'records_extracted is 0');
+      throw new Error(`records_extracted is 0: ${errors.join(' | ') || 'no companies produced a usable profile snapshot'}`);
+    }
+
+    console.log(`[ingest:linkedin] ${written}/${Object.keys(COMPANY_SLUGS).length} profile snapshots written (${opts.cached ? 'cached' : 'live'})`);
+    if (errors.length) console.log('[ingest:linkedin] skipped:', errors.join(' | '));
+    return { skipped: false, records_extracted: written, errors };
+  });
+}
+
+// CLI entry point.
+if (process.argv[1] && process.argv[1].endsWith('linkedin.ts')) {
+  const cached = process.argv.includes('--cached');
+  ingestLinkedin({ cached })
+    .then((result) => {
+      console.log('[ingest:linkedin] summary', result);
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error('[ingest:linkedin] FAILED', err.message);
+      process.exit(1);
+    });
+}

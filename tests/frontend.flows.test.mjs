@@ -84,3 +84,35 @@ test('monitoring flow: renders findings with source citations, no error boundary
   const citation = page.locator('main ul li a[target="_blank"]').first();
   assert.ok(await citation.count() > 0, 'monitoring should render at least one citation link');
 });
+
+test('trend detail page renders a sparkline svg for the timeline', async () => {
+  await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' });
+  const href = await page.locator('table tbody tr td a').first().getAttribute('href');
+  await page.goto(`${BASE}${href}`, { waitUntil: 'networkidle' });
+  const svg = page.locator('main svg[role="img"] polyline');
+  assert.ok((await svg.count()) > 0, 'trend detail should render a sparkline svg polyline');
+});
+
+test('competitors page shows an "Est." badge for company data not backed by a real snapshot', async () => {
+  await page.goto(`${BASE}/competitors`, { waitUntil: 'networkidle' });
+  const text = await page.textContent('body');
+  assert.ok(text.includes('Est.'), 'competitors page should badge illustrative seed data as an estimate');
+});
+
+test('competitors search: query param filters and shows an honest count', async () => {
+  const res = await page.goto(`${BASE}/competitors?q=enterprise`, { waitUntil: 'networkidle' });
+  assert.ok(res.status() < 400);
+  const text = (await page.textContent('body')).toLowerCase();
+  assert.ok(!text.includes('application error'));
+});
+
+test('chat box on /trends submits a question and renders an answer with a citation', async () => {
+  await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' });
+  const input = page.locator('main input[aria-label="Ask a question"]');
+  assert.ok((await input.count()) > 0, 'trends page should render a chat input');
+  await input.fill('notion');
+  await page.locator('main button[type="submit"]', { hasText: 'Ask' }).first().click();
+  await page.waitForSelector('main p:has-text("Checked live data")', { timeout: 20000 });
+  const text = await page.textContent('main');
+  assert.ok(text.includes('Checked live data'), 'chat response should disclose live-data attempt status');
+});

@@ -1,4 +1,5 @@
 import { FindingCard } from '../../components/FindingCard';
+import { PageChat } from '../../components/PageChat';
 
 type Post = {
   id: string;
@@ -65,6 +66,7 @@ export default async function MonitoringPage() {
           })}
         </ul>
       )}
+      <PageChat scope="own" label="monitoring" />
     </main>
   );
 }

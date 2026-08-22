@@ -138,9 +138,43 @@ export async function getTrendsSearch(db: Database.Database, rawQuery: string) {
   });
 }
 
+/**
+ * Daily post-count timeline for a trend's term across its window_start..window_end,
+ * computed from real posted_at timestamps -- powers a sparkline, not a new stored
+ * table. Zero-filled for days with no matches so the UI can render a continuous
+ * line (CONTRACT.md), not a sparse/skipped array.
+ */
+function buildTimeline(
+  db: Database.Database,
+  term: string,
+  windowStart: string,
+  windowEnd: string,
+): Array<{ date: string; count: number }> {
+  const rows = db
+    .prepare(
+      `select substr(posted_at, 1, 10) as day, count(*) as n
+       from posts
+       where posted_at >= ? and posted_at <= ? and text like '%' || ? || '%' collate nocase
+       group by day`,
+    )
+    .all(windowStart, windowEnd, term) as { day: string; n: number }[];
+  const countsByDay = new Map(rows.map((r) => [r.day, r.n]));
+
+  const timeline: Array<{ date: string; count: number }> = [];
+  const start = new Date(windowStart.slice(0, 10));
+  const end = new Date(windowEnd.slice(0, 10));
+  for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    const day = d.toISOString().slice(0, 10);
+    timeline.push({ date: day, count: countsByDay.get(day) ?? 0 });
+  }
+  return timeline;
+}
+
 export async function getTrendById(db: Database.Database, id: string) {
   return withSpan('api.trends.byId', async (span) => {
-    const trend = db.prepare('select * from trends where id = ?').get(id);
+    const trend = db.prepare('select * from trends where id = ?').get(id) as
+      | { id: string; term: string; window_start: string; window_end: string }
+      | undefined;
     if (!trend) {
       span.setAttr('failure_reason', 'not found');
       return null;
@@ -152,8 +186,10 @@ export async function getTrendById(db: Database.Database, id: string) {
           .prepare(`select * from posts where id in (${postIds.map(() => '?').join(',')})`)
           .all(...postIds)
       : [];
+    const timeline = buildTimeline(db, trend.term, trend.window_start, trend.window_end);
     span.setRecordCount(findings.length);
-    return { trend, findings, posts };
+    span.setAttr('timeline_days', timeline.length);
+    return { trend, findings, posts, timeline };
   });
 }
 
@@ -177,11 +213,78 @@ interface CompanyRow {
  * returned array in JS (not SQL) because `size` is an ordinal category, not a string
  * ORDER BY can sort correctly on its own.
  */
+interface SnapshotRow {
+  id: string;
+  company_id: string;
+  item_type: string;
+  label: string;
+  value_text: string;
+  url: string;
+  captured_at: string;
+}
+
+function sortCompanies(companies: CompanyRow[], sort: string): CompanyRow[] {
+  if (sort === 'market_share') {
+    return [...companies].sort((a, b) => (b.market_share ?? -Infinity) - (a.market_share ?? -Infinity));
+  }
+  if (sort === 'size') {
+    return [...companies].sort((a, b) => (SIZE_ORDER[a.size ?? ''] ?? -1) - (SIZE_ORDER[b.size ?? ''] ?? -1));
+  }
+  return [...companies].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function getCompetitors(
   db: Database.Database,
-  opts: { industry?: string | null; sort?: string | null } = {},
+  opts: { industry?: string | null; sort?: string | null; q?: string | null } = {},
 ) {
   return withSpan('api.competitors', async (span) => {
+    const sort = opts.sort ?? 'name';
+    span.setAttr('sort', sort);
+
+    if (opts.q) {
+      const q = opts.q.trim();
+      span.setAttr('query', q);
+      if (!q) {
+        return { query: opts.q, matched_companies: 0, companies: [], snapshots: [] };
+      }
+
+      // Companies whose own name/niche mention the term, OR companies with at
+      // least one snapshot whose label/value_text mentions the term. Computed on
+      // the fly (CONTRACT.md), not a stored search index.
+      let companies = db
+        .prepare(
+          `select distinct c.* from companies c
+           left join competitor_snapshots s on s.company_id = c.id
+           where c.role = 'competitor' and (
+             c.name like '%' || ? || '%' collate nocase
+             or c.niche like '%' || ? || '%' collate nocase
+             or s.label like '%' || ? || '%' collate nocase
+             or s.value_text like '%' || ? || '%' collate nocase
+           )`,
+        )
+        .all(q, q, q, q) as CompanyRow[];
+
+      if (opts.industry) {
+        companies = companies.filter((c) => (c.industry ?? '').toLowerCase() === opts.industry!.toLowerCase());
+        span.setAttr('industry_filter', opts.industry);
+      }
+      companies = sortCompanies(companies, sort);
+
+      // Snapshots belonging to any matched company are relevant context (mirrors
+      // /api/competitors/:id's shape), not just the individual snapshot rows that
+      // literally matched the term.
+      const matchedCompanyIds = new Set(companies.map((c) => c.id));
+      const snapshots = matchedCompanyIds.size
+        ? (db.prepare(`select * from competitor_snapshots order by captured_at desc`).all() as SnapshotRow[]).filter(
+            (s) => matchedCompanyIds.has(s.company_id),
+          )
+        : [];
+
+      span.setRecordCount(companies.length);
+      if (companies.length === 0) span.setAttr('failure_reason', 'zero matched companies');
+      return { query: q, matched_companies: companies.length, companies, snapshots };
+    }
+
     let companies: CompanyRow[];
     if (opts.industry) {
       companies = db
@@ -192,17 +295,7 @@ export async function getCompetitors(
       companies = db.prepare(`select * from companies where role = 'competitor'`).all() as CompanyRow[];
     }
 
-    const sort = opts.sort ?? 'name';
-    span.setAttr('sort', sort);
-    if (sort === 'market_share') {
-      companies = [...companies].sort((a, b) => (b.market_share ?? -Infinity) - (a.market_share ?? -Infinity));
-    } else if (sort === 'size') {
-      companies = [...companies].sort(
-        (a, b) => (SIZE_ORDER[a.size ?? ''] ?? -1) - (SIZE_ORDER[b.size ?? ''] ?? -1),
-      );
-    } else {
-      companies = [...companies].sort((a, b) => a.name.localeCompare(b.name));
-    }
+    companies = sortCompanies(companies, sort);
 
     const snapshots = db.prepare('select * from competitor_snapshots order by captured_at desc').all();
     span.setRecordCount(companies.length + snapshots.length);
@@ -354,9 +447,36 @@ export interface ChatCitation {
  * is independently re-verified server-side as a literal substring of its post's
  * text -- the model's own claim is not trusted, same defense-in-depth as findings.
  */
-export async function getChat(db: Database.Database, question: string) {
+const CHAT_SCOPE_TO_SOURCE_TYPE: Record<string, string> = {
+  trends: 'trend',
+  competitor: 'competitor',
+  own: 'own',
+};
+
+/**
+ * Scores a candidate post's relevance to `term`: term-frequency (case-insensitive
+ * occurrence count) plus a bonus if the term appears in the first ~200 characters,
+ * a cheap proxy for "this post is centrally about the term" vs. mentioning it once
+ * in passing near the end. No new dependency, per CONTRACT.md.
+ */
+function scoreRelevance(text: string, term: string): number {
+  const lowerText = text.toLowerCase();
+  const lowerTerm = term.toLowerCase();
+  if (!lowerTerm) return 0;
+  let occurrences = 0;
+  let idx = lowerText.indexOf(lowerTerm);
+  while (idx !== -1) {
+    occurrences += 1;
+    idx = lowerText.indexOf(lowerTerm, idx + lowerTerm.length);
+  }
+  const leadBonus = lowerText.slice(0, 200).includes(lowerTerm) ? 2 : 0;
+  return occurrences + leadBonus;
+}
+
+export async function getChat(db: Database.Database, question: string, scope?: string) {
   return withSpan('api.chat', async (span) => {
     span.setAttr('question', question);
+    if (scope) span.setAttr('scope', scope);
 
     const companyNames = (db.prepare(`select name from companies`).all() as { name: string }[]).map((c) => c.name);
     const term = extractChatTerm(question, companyNames);
@@ -374,10 +494,33 @@ export async function getChat(db: Database.Database, question: string) {
       ...(brightdataResult.error ? { error: brightdataResult.error } : {}),
     };
 
-    const matched = db
-      .prepare(`select * from posts where text like '%' || ? || '%' collate nocase order by posted_at desc limit 10`)
-      .all(term) as PostRow[];
+    const sourceType = scope ? CHAT_SCOPE_TO_SOURCE_TYPE[scope] : undefined;
+    if (scope && !sourceType) {
+      span.setAttr('failure_reason', `unknown scope "${scope}"`);
+    }
+
+    // Pre-filter: top 30 by recency (optionally restricted to a source_type via
+    // `scope`), then re-rank that candidate set by real relevance below. Recency
+    // is kept as a cheap pre-filter / natural tiebreak, not the final ranking.
+    const candidates = (
+      sourceType
+        ? db
+            .prepare(
+              `select * from posts where source_type = ? and text like '%' || ? || '%' collate nocase order by posted_at desc limit 30`,
+            )
+            .all(sourceType, term)
+        : db
+            .prepare(`select * from posts where text like '%' || ? || '%' collate nocase order by posted_at desc limit 30`)
+            .all(term)
+    ) as PostRow[];
+
+    const matched = candidates
+      .map((p) => ({ post: p, score: scoreRelevance(p.text, term) }))
+      .sort((a, b) => (b.score !== a.score ? b.score - a.score : b.post.posted_at.localeCompare(a.post.posted_at)))
+      .slice(0, 10)
+      .map((r) => r.post);
     span.setRecordCount(matched.length);
+    span.setAttr('candidates_considered', candidates.length);
 
     if (matched.length === 0) {
       span.setAttr('failure_reason', 'zero matched posts, LLM call skipped');

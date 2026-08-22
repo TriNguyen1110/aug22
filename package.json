@@ -8,6 +8,7 @@
     "start": "next start",
     "migrate": "tsx src/db/migrate.ts",
     "ingest:reddit": "node --env-file=.env.local --import tsx src/ingest/reddit.ts",
+    "ingest:linkedin": "node --env-file=.env.local --import tsx src/ingest/linkedin.ts",
     "detect": "tsx src/detect/run.ts",
     "seed": "node tools/seed.mjs",
     "seed:bad": "node tools/seed.mjs --with-bad",

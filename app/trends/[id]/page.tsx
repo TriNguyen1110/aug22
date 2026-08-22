@@ -1,6 +1,7 @@
 import { Chip, Link } from '@heroui/react';
 import { ArrowLeft } from 'lucide-react';
 import { FindingCard } from '../../../components/FindingCard';
+import { Sparkline } from '../../../components/Sparkline';
 
 type Trend = {
   id: string;
@@ -41,6 +42,7 @@ export default async function TrendDetailPage({ params }: { params: { id: string
   let trend: Trend | null = null;
   let findings: Finding[] = [];
   let posts: Post[] = [];
+  let timeline: Array<{ date: string; count: number }> = [];
   let error: string | null = null;
 
   try {
@@ -48,6 +50,7 @@ export default async function TrendDetailPage({ params }: { params: { id: string
     trend = data.trend ?? null;
     findings = data.findings ?? [];
     posts = data.posts ?? [];
+    timeline = data.timeline ?? [];
   } catch (err) {
     error = (err as Error).message;
   }
@@ -82,6 +85,7 @@ export default async function TrendDetailPage({ params }: { params: { id: string
             <p className="mt-2 text-sm text-silver-dim">
               Window: {trend.window_start} to {trend.window_end}
             </p>
+            <Sparkline timeline={timeline} />
           </section>
 
           <section>

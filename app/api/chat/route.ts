@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { getDb } from '../../../src/api/db';
 import { getChat } from '../../../src/api/routes';
 
-const ChatBody = z.object({ question: z.string().min(1) });
+const ChatBody = z.object({
+  question: z.string().min(1),
+  scope: z.enum(['trends', 'competitor', 'own']).optional(),
+});
 
 export async function POST(request: Request) {
   let body: unknown;
@@ -19,7 +22,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await getChat(getDb(), parsed.data.question);
+    const result = await getChat(getDb(), parsed.data.question, parsed.data.scope);
     return NextResponse.json(result);
   } catch (err) {
     const status = (err as { status?: number })?.status ?? 500;

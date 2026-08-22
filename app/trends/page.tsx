@@ -1,4 +1,5 @@
 import { Card, CardBody, Chip, Link } from '@heroui/react';
+import { PageChat } from '../../components/PageChat';
 
 type Trend = {
   id: string;
@@ -76,6 +77,7 @@ export default async function TrendsPage() {
           </CardBody>
         </Card>
       )}
+      <PageChat scope="trends" label="trends" />
     </main>
   );
 }
