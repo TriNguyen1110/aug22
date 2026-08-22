@@ -1,3 +1,5 @@
+import { Card, CardBody, Chip, Link } from '@heroui/react';
+
 type Trend = {
   id: string;
   term: string;
@@ -52,35 +54,59 @@ export default async function TrendDetailPage({ params }: { params: { id: string
 
   return (
     <main>
-      <p><a href="/trends">Back to trends</a></p>
-      {error && <p>Could not load trend: {error}</p>}
-      {!error && !trend && <p>Trend not found.</p>}
+      <Link href="/trends" className="text-sm">
+        &larr; Back to trends
+      </Link>
+      {error && <p className="mt-6 text-red-600">Could not load trend: {error}</p>}
+      {!error && !trend && <p className="mt-6 text-slate-500">Trend not found.</p>}
       {trend && (
         <>
-          <h1>{trend.term}</h1>
-          <p>
-            Recent: {trend.recent_count} · Prior: {trend.prior_count} · Score:{' '}
-            {trend.score.toFixed(2)}
+          <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-900">
+            {trend.term}
+          </h1>
+          <p className="mt-2 flex flex-wrap items-center gap-2 text-slate-600">
+            <span>Recent: {trend.recent_count}</span>
+            <span>&middot;</span>
+            <span>Prior: {trend.prior_count}</span>
+            <span>&middot;</span>
+            <span>Score:</span>
+            <Chip size="sm" variant="flat" color="primary">
+              {trend.score.toFixed(2)}
+            </Chip>
           </p>
-          <p>
+          <p className="mt-1 text-sm text-slate-500">
             Window: {trend.window_start} to {trend.window_end}
           </p>
-          <h2>Findings</h2>
-          {findings.length === 0 && <p>No findings yet.</p>}
-          <ul>
+
+          <h2 className="mt-8 text-xl font-semibold text-slate-900">Findings</h2>
+          {findings.length === 0 && <p className="mt-2 text-slate-500">No findings yet.</p>}
+          <ul className="mt-4 space-y-4">
             {findings.map((f) => {
               const post = postById.get(f.post_id);
               return (
-                <li key={f.id} style={{ marginBottom: '1rem' }}>
-                  <p>{f.claim}</p>
-                  <blockquote>&quot;{f.quote}&quot;</blockquote>
-                  {post ? (
-                    <a href={post.url} target="_blank" rel="noreferrer">
-                      Source: {post.platform} / {post.author}
-                    </a>
-                  ) : (
-                    <span>Source post unavailable</span>
-                  )}
+                <li key={f.id}>
+                  <Card className="border border-slate-200 shadow-sm">
+                    <CardBody>
+                      <p className="text-slate-800">{f.claim}</p>
+                      <blockquote className="mt-2 border-l-2 border-slate-300 pl-3 italic text-slate-600">
+                        &quot;{f.quote}&quot;
+                      </blockquote>
+                      {post ? (
+                        <Link
+                          href={post.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-3 inline-block text-sm"
+                        >
+                          Source: {post.platform} / {post.author}
+                        </Link>
+                      ) : (
+                        <span className="mt-3 inline-block text-sm text-slate-400">
+                          Source post unavailable
+                        </span>
+                      )}
+                    </CardBody>
+                  </Card>
                 </li>
               );
             })}

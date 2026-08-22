@@ -66,6 +66,15 @@ test('monitoring flow: returns the target company\'s own posts and findings', as
   assert.ok(j.findings.length > 0, 'monitoring should have at least one finding');
 });
 
+test('pipeline-health flow: reports both naive and brightdata comparison keys', async () => {
+  const j = await get('/api/pipeline-health');
+  assert.ok(j.naive && typeof j.naive === 'object', 'naive key should be present');
+  assert.ok('url' in j.naive && 'status' in j.naive && 'bytes' in j.naive && 'records_found' in j.naive && 'note' in j.naive);
+  assert.ok(j.brightdata && typeof j.brightdata === 'object', 'brightdata key should be present');
+  assert.ok('attempted' in j.brightdata && 'ok' in j.brightdata && 'records_extracted' in j.brightdata);
+  assert.ok(j.brightdata.records_extracted > 0, 'brightdata records_extracted should reflect real ingested rows');
+});
+
 test('no main-flow route requires auth, a session, or credentials', async () => {
   for (const path of ['/api/health', '/api/trends', '/api/competitors', '/api/monitoring']) {
     const res = await fetch(new URL(path, BASE));

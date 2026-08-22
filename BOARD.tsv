@@ -13,3 +13,4 @@ H+0.3	fact	citations.snapshots	3/3 resolve	verifier	SCREEN	linear.app/pricing, a
 H+0.3	fact	citations.posts	0/8 resolve	verifier	SCREEN	all posts.url are https://example.com/seed/N placeholders (404), known seed-data limitation per CLAUDE.md not a frontend bug
 H+0.3	item	frontend-v1	done	verifier	SCREEN	weblogs clean 6 routes, shot 12/12 real content both viewports, every trend/finding/snapshot citation renders as clickable <a href> to posts.url or snapshot.url, competitor snapshot links resolve 200; seed post URLs are placeholders and will resolve once real ingest replaces them, not blocking
 H+0.3	item	10	backlog	frontend	SCREEN	restyle all pages with Tailwind toward a clean modern-SaaS look (generous whitespace, cards, subtle borders, no raw HTML table border=1), no functional changes
+H+3.0	item	10	doing	frontend	SCREEN	claimed, tailwind+heroui restyle

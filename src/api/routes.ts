@@ -5,6 +5,7 @@
  * observability rule (duration, record count, failure reason).
  */
 import type Database from 'better-sqlite3';
+import { readdirSync } from 'node:fs';
 import { withSpan } from '../otel';
 
 export async function getHealth(db: Database.Database) {
@@ -68,6 +69,70 @@ export async function getCompetitorById(db: Database.Database, id: string) {
     const posts = db.prepare('select * from posts where company_id = ?').all(id);
     span.setRecordCount(snapshots.length + findings.length + posts.length);
     return { company, snapshots, findings, posts };
+  });
+}
+
+/**
+ * Demo endpoint for item 08 (BOARD.tsv): shows the "naive fetch vs Bright Data" gap
+ * live, in the UI, with real numbers rather than a slide. `naive` runs a plain
+ * unproxied fetch against Reddit's public JSON listing on every request -- cheap,
+ * no auth, and it either gets rate-limited/blocked or returns a real page, and we
+ * report whichever actually happens rather than assuming. `brightdata` reports the
+ * last real ingest's numbers (from the DB, same source as /api/health) plus whether
+ * a cached raw payload from today exists, without re-running the pipeline.
+ */
+export async function getPipelineHealth(db: Database.Database) {
+  return withSpan('api.pipeline-health', async (span) => {
+    const naiveUrl = 'https://www.reddit.com/r/notion.json';
+    let naive: Record<string, unknown>;
+    try {
+      const res = await fetch(naiveUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; trendwatch-demo/1.0)' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const bodyText = await res.text();
+      const bytes = Buffer.byteLength(bodyText, 'utf-8');
+      let records_found = 0;
+      let note: string;
+      try {
+        const parsed = JSON.parse(bodyText);
+        records_found = Array.isArray(parsed?.data?.children) ? parsed.data.children.length : 0;
+        note = records_found > 0
+          ? `HTTP ${res.status}, parsed JSON with ${records_found} post(s) in data.children`
+          : `HTTP ${res.status}, JSON parsed but data.children is empty or missing (silent-zero-records failure mode)`;
+      } catch {
+        note = `HTTP ${res.status}, response was not valid JSON (likely a block page or JS shell), ${bytes} bytes`;
+      }
+      naive = { url: naiveUrl, status: res.status, bytes, records_found, note };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      naive = { url: naiveUrl, status: null, bytes: 0, records_found: 0, note: `fetch failed: ${reason}` };
+      span.setAttr('naive_failure_reason', reason);
+    }
+
+    const { n: records_extracted } = db.prepare('select count(*) as n from posts').get() as { n: number };
+    const last = db.prepare('select max(fetched_at) as t from posts').get() as { t: string | null };
+
+    let cache_path: string | null = null;
+    try {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const files = readdirSync('./data/raw').filter((f) => f.startsWith(`reddit-${todayIso}`));
+      cache_path = files.length ? `./data/raw/${files[0]}` : null;
+    } catch {
+      cache_path = null;
+    }
+
+    const brightdata = {
+      attempted: Boolean(cache_path),
+      ok: records_extracted > 0,
+      records_extracted,
+      last_ingest_at: last.t ?? null,
+      cache_path,
+      ...(records_extracted === 0 ? { error: 'no posts in DB yet' } : {}),
+    };
+
+    span.setRecordCount((naive.records_found as number) + records_extracted);
+    return { naive, brightdata };
   });
 }
 

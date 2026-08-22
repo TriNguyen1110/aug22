@@ -12,12 +12,19 @@
  * a failure, not a success (docs/USE_CASES.md, CLAUDE.md Bright Data section).
  *
  * Usage:
- *   bun run src/ingest/reddit.ts                # real fetch, needs BRIGHTDATA_API_TOKEN
+ *   bun run src/ingest/reddit.ts                # real fetch, needs BRIGHTDATA_PROXY_* (web_unlocker1 zone)
  *   bun run src/ingest/reddit.ts --cached        # replay most recent ./data/raw/ file
+ *
+ * Bright Data's direct API (BRIGHTDATA_API_TOKEN / collector trigger) is unavailable
+ * while the account shows "suspended, contact account manager". Live fetch instead
+ * proxies each subreddit's public JSON listing through the web_unlocker1 zone via
+ * undici's ProxyAgent. If that zone is blocked by the same suspension, this fails
+ * loudly (non-zero exit, span failure_reason set) rather than pretending to succeed.
  */
 import { z } from 'zod';
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { migrate } from '../db/migrate.js';
 import { withSpan } from '../otel';
 
@@ -66,30 +73,89 @@ function cachePath(iso: string) {
   return join(RAW_DIR, `${PLATFORM}-${iso.slice(0, 10)}.json`);
 }
 
+function proxyEnv() {
+  return {
+    host: process.env.BRIGHTDATA_PROXY_HOST,
+    port: process.env.BRIGHTDATA_PROXY_PORT,
+    username: process.env.BRIGHTDATA_PROXY_USERNAME,
+    password: process.env.BRIGHTDATA_PROXY_PASSWORD,
+  };
+}
+
+function hasProxyConfig(): boolean {
+  const { host, port, username, password } = proxyEnv();
+  return Boolean(host && port && username && password);
+}
+
+// Bright Data account is currently suspended, so the Bearer-token collector API
+// (api.brightdata.com/dca/trigger_immediate) is unavailable. Fall back to the
+// web_unlocker1 proxy zone: proxy each subreddit's public JSON listing through
+// Bright Data's Web Unlocker so requests come from Bright Data's IP pool instead
+// of ours. This proxy zone may ALSO be blocked by the same suspension -- that is
+// an expected failure mode here, not a bug, and must surface loudly rather than
+// being swallowed.
 async function fetchFromBrightData(): Promise<unknown> {
-  const token = process.env.BRIGHTDATA_API_TOKEN;
-  const collectorId = process.env.BRIGHTDATA_COLLECTOR_ID; // fact row once dry-run lands
-  if (!token) {
-    throw new Error('BRIGHTDATA_API_TOKEN missing');
-  }
-  if (!collectorId) {
-    throw new Error('BRIGHTDATA_COLLECTOR_ID missing, fill in after the dry run');
+  const { host, port, username, password } = proxyEnv();
+  if (!host || !port || !username || !password) {
+    throw new Error('BRIGHTDATA_PROXY_HOST/PORT/USERNAME/PASSWORD missing');
   }
 
-  const res = await fetch(`https://api.brightdata.com/dca/trigger_immediate?collector=${collectorId}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ subreddits: SUBREDDITS }),
-    signal: AbortSignal.timeout(60_000),
-  });
+  const proxyUrl = `http://${username}:${password}@${host}:${port}`;
+  const dispatcher = new ProxyAgent(proxyUrl);
 
-  if (!res.ok) {
-    throw new Error(`Bright Data HTTP ${res.status}`);
+  const merged: unknown[] = [];
+  const errors: string[] = [];
+
+  for (const subreddit of SUBREDDITS) {
+    try {
+      const res = await undiciFetch(`https://www.reddit.com/r/${subreddit}.json`, {
+        dispatcher,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; trendwatch-ingest/1.0)' },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!res.ok) {
+        errors.push(`r/${subreddit}: HTTP ${res.status}`);
+        continue;
+      }
+      const body: any = await res.json();
+      const children = body?.data?.children ?? [];
+      for (const c of children) {
+        const d = c?.data ?? {};
+        merged.push({
+          id: d.id ? `t3_${d.id}` : d.name,
+          url: d.url ?? (d.permalink ? `https://www.reddit.com${d.permalink}` : undefined),
+          user_posted: d.author,
+          title: d.title,
+          description: d.selftext,
+          community_name: d.subreddit,
+          date_posted: typeof d.created_utc === 'number' ? new Date(d.created_utc * 1000).toISOString() : undefined,
+        });
+      }
+    } catch (err) {
+      // undici wraps the real proxy error a couple of `cause` layers deep (e.g.
+      // "Proxy response (407) !== 200 when HTTP Tunneling" for a suspended or
+      // unauthorized account) behind a generic top-level "fetch failed" message.
+      // Walk the chain so observability sees the real reason, not the wrapper.
+      let cur: unknown = err;
+      let reason = String(err);
+      while (cur instanceof Error) {
+        reason = cur.message;
+        cur = (cur as { cause?: unknown }).cause;
+      }
+      errors.push(`r/${subreddit}: ${reason}`);
+    }
   }
-  return res.json();
+
+  await dispatcher.close();
+
+  if (merged.length === 0) {
+    // All subreddits failed (or all returned zero usable rows), most likely the
+    // suspended-account proxy being blocked too. Fail loudly with the real
+    // per-subreddit errors instead of silently returning an empty array.
+    throw new Error(`proxied fetch produced 0 records across ${SUBREDDITS.length} subreddit(s): ${errors.join(' | ') || 'no data in any response'}`);
+  }
+
+  return merged;
 }
 
 function loadMostRecentCache(): { path: string; data: unknown } {
@@ -118,12 +184,12 @@ export async function ingestReddit(opts: { cached: boolean }) {
       raw = data;
       cachePathUsed = path;
     } else {
-      if (!process.env.BRIGHTDATA_API_TOKEN) {
+      if (!hasProxyConfig()) {
         // Non-fatal: log clearly and exit without crashing the app, per the
-        // instruction that an absent token must not throw.
-        console.log('[ingest:reddit] BRIGHTDATA_API_TOKEN not set. Skipping live fetch.');
-        console.log('[ingest:reddit] Run with --cached to replay a cached payload, or set the token in .env.local.');
-        span.setAttr('failure_reason', 'no token, skipped');
+        // instruction that missing credentials must not throw.
+        console.log('[ingest:reddit] BRIGHTDATA_PROXY_* vars not set. Skipping live fetch.');
+        console.log('[ingest:reddit] Run with --cached to replay a cached payload, or set the proxy vars in .env.local.');
+        span.setAttr('failure_reason', 'no proxy config, skipped');
         span.setRecordCount(0);
         return { skipped: true, records_extracted: 0 };
       }

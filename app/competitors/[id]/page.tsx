@@ -1,3 +1,5 @@
+import { Card, CardBody, Link } from '@heroui/react';
+
 type Company = {
   id: string;
   name: string;
@@ -61,55 +63,80 @@ export default async function CompetitorDetailPage({ params }: { params: { id: s
 
   return (
     <main>
-      <p><a href="/competitors">Back to competitors</a></p>
-      {error && <p>Could not load company: {error}</p>}
-      {!error && !company && <p>Company not found.</p>}
+      <Link href="/competitors" className="text-sm">
+        &larr; Back to competitors
+      </Link>
+      {error && <p className="mt-6 text-red-600">Could not load company: {error}</p>}
+      {!error && !company && <p className="mt-6 text-slate-500">Company not found.</p>}
       {company && (
         <>
-          <h1>{company.name}</h1>
-          <p>{company.domain}</p>
+          <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-900">
+            {company.name}
+          </h1>
+          <p className="mt-1 text-slate-500">{company.domain}</p>
 
-          <h2>Snapshots</h2>
-          {snapshots.length === 0 && <p>No snapshots yet.</p>}
+          <h2 className="mt-8 text-xl font-semibold text-slate-900">Snapshots</h2>
+          {snapshots.length === 0 && <p className="mt-2 text-slate-500">No snapshots yet.</p>}
           {snapshots.length > 0 && (
-            <table border={1} cellPadding={6} style={{ borderCollapse: 'collapse', width: '100%' }}>
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Label</th>
-                  <th>Value</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {snapshots.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.item_type}</td>
-                    <td>{s.label}</td>
-                    <td>{s.value_text}</td>
-                    <td><a href={s.url} target="_blank" rel="noreferrer">link</a></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Card className="mt-3 border border-slate-200 shadow-sm">
+              <CardBody className="overflow-x-auto p-0">
+                <table className="w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
+                      <th className="px-5 py-3 font-medium">Type</th>
+                      <th className="px-5 py-3 font-medium">Label</th>
+                      <th className="px-5 py-3 font-medium">Value</th>
+                      <th className="px-5 py-3 font-medium">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snapshots.map((s) => (
+                      <tr key={s.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                        <td className="px-5 py-3 text-slate-700">{s.item_type}</td>
+                        <td className="px-5 py-3 text-slate-700">{s.label}</td>
+                        <td className="px-5 py-3 text-slate-700">{s.value_text}</td>
+                        <td className="px-5 py-3">
+                          <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm">
+                            link
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </CardBody>
+            </Card>
           )}
 
-          <h2>Findings</h2>
-          {findings.length === 0 && <p>No findings yet.</p>}
-          <ul>
+          <h2 className="mt-8 text-xl font-semibold text-slate-900">Findings</h2>
+          {findings.length === 0 && <p className="mt-2 text-slate-500">No findings yet.</p>}
+          <ul className="mt-4 space-y-4">
             {findings.map((f) => {
               const post = postById.get(f.post_id);
               return (
-                <li key={f.id} style={{ marginBottom: '1rem' }}>
-                  <p>{f.claim}</p>
-                  <blockquote>&quot;{f.quote}&quot;</blockquote>
-                  {post ? (
-                    <a href={post.url} target="_blank" rel="noreferrer">
-                      Source: {post.platform} / {post.author}
-                    </a>
-                  ) : (
-                    <span>Source post unavailable</span>
-                  )}
+                <li key={f.id}>
+                  <Card className="border border-slate-200 shadow-sm">
+                    <CardBody>
+                      <p className="text-slate-800">{f.claim}</p>
+                      <blockquote className="mt-2 border-l-2 border-slate-300 pl-3 italic text-slate-600">
+                        &quot;{f.quote}&quot;
+                      </blockquote>
+                      {post ? (
+                        <Link
+                          href={post.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-3 inline-block text-sm"
+                        >
+                          Source: {post.platform} / {post.author}
+                        </Link>
+                      ) : (
+                        <span className="mt-3 inline-block text-sm text-slate-400">
+                          Source post unavailable
+                        </span>
+                      )}
+                    </CardBody>
+                  </Card>
                 </li>
               );
             })}
