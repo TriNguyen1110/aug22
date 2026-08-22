@@ -173,19 +173,52 @@ function buildTimeline(
 export async function getTrendById(db: Database.Database, id: string) {
   return withSpan('api.trends.byId', async (span) => {
     const trend = db.prepare('select * from trends where id = ?').get(id) as
-      | { id: string; term: string; window_start: string; window_end: string }
+      | { id: string; term: string; window_start: string; window_end: string; recent_count: number; prior_count: number; score: number }
       | undefined;
     if (!trend) {
       span.setAttr('failure_reason', 'not found');
       return null;
     }
-    const findings = db.prepare('select * from findings where trend_id = ?').all(id);
-    const postIds = [...new Set((findings as { post_id: string }[]).map((f) => f.post_id))];
-    const posts = postIds.length
-      ? db
-          .prepare(`select * from posts where id in (${postIds.map(() => '?').join(',')})`)
-          .all(...postIds)
-      : [];
+    let findings = db.prepare('select * from findings where trend_id = ?').all(id) as {
+      post_id: string;
+    }[];
+    let posts: PostRow[];
+    if (findings.length > 0) {
+      const postIds = [...new Set(findings.map((f) => f.post_id))];
+      posts = db
+        .prepare(`select * from posts where id in (${postIds.map(() => '?').join(',')})`)
+        .all(...postIds) as PostRow[];
+    } else {
+      // The `trends` table is now authoritative over a live detect sweep (src/detect/
+      // burst.ts) -- nothing pre-authors findings for a term the moment it starts
+      // bursting. Rather than show a real trend with an empty findings array, generate
+      // findings the same way the ?q= scoped search does: on the fly from posts whose
+      // text actually contains the term, quote taken verbatim so the grounding
+      // invariant holds by construction (findVerbatimQuote never fabricates).
+      const matched = db
+        .prepare(`select * from posts where text like '%' || ? || '%' collate nocase`)
+        .all(trend.term) as PostRow[];
+      const citedPosts = new Map<string, PostRow>();
+      const generated: Record<string, unknown>[] = [];
+      for (const p of matched) {
+        const quote = findVerbatimQuote(trend.term, p.text);
+        if (!quote) continue;
+        citedPosts.set(p.id, p);
+        generated.push({
+          id: `f-${id}-${p.id}`,
+          post_id: p.id,
+          trend_id: id,
+          company_id: p.company_id,
+          use_case: 'trends',
+          claim: `"${trend.term}" is trending: ${trend.recent_count} recent mention(s) vs ${trend.prior_count} prior.`,
+          quote,
+          category: 'trend',
+          confidence: Math.min(1, trend.score / 5),
+        });
+      }
+      findings = generated as unknown as { post_id: string }[];
+      posts = [...citedPosts.values()];
+    }
     const timeline = buildTimeline(db, trend.term, trend.window_start, trend.window_end);
     span.setRecordCount(findings.length);
     span.setAttr('timeline_days', timeline.length);

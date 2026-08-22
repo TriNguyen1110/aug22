@@ -106,6 +106,26 @@ test('competitors search: query param filters and shows an honest count', async 
   assert.ok(!text.includes('application error'));
 });
 
+test('trends search: known term returns matched posts with real citations', async () => {
+  const res = await page.goto(`${BASE}/trends?q=onboarding`, { waitUntil: 'networkidle' });
+  assert.ok(res.status() < 400);
+  const input = page.locator('main input[name="q"]');
+  assert.ok((await input.count()) > 0, 'trends page should render a search box');
+  const text = await page.textContent('main');
+  assert.ok(text.includes('matching post'), 'search should show an honest matched_posts count');
+  const citation = page.locator('main a[target="_blank"]').first();
+  assert.ok(await citation.count() > 0, 'search results should render at least one citation link');
+  const citationHref = await citation.getAttribute('href');
+  assert.ok(citationHref?.startsWith('http'), 'citation must link out to the source post url');
+});
+
+test('trends search: unmatched term shows an honest empty state, not a blank table', async () => {
+  const res = await page.goto(`${BASE}/trends?q=zzzznonexistentterm`, { waitUntil: 'networkidle' });
+  assert.ok(res.status() < 400);
+  const text = (await page.textContent('main')).toLowerCase();
+  assert.ok(text.includes('no posts found'), 'unmatched search term should say so plainly');
+});
+
 test('chat box on /trends submits a question and renders an answer with a citation', async () => {
   await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' });
   const input = page.locator('main input[aria-label="Ask a question"]');

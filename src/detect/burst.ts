@@ -17,11 +17,42 @@ const MIN_ABS_COUNT = 2; // floor: a term needs at least this many recent mentio
 const MAX_TERMS = 20;
 
 const STOPWORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
-  'to', 'of', 'in', 'on', 'for', 'with', 'at', 'by', 'this', 'that', 'it', 'we',
-  'i', 'you', 'my', 'our', 'their', 'have', 'has', 'had', 'not', 'do', 'does',
-  'did', 'so', 'as', 'if', 'from', 'about', 'they', 'them', 'he', 'she', 'his',
-  'her', 'its', 'us', 'am', 'just', 'can', 'will', 'would', 'could', 'should',
+  // articles / conjunctions / prepositions
+  'the', 'a', 'an', 'and', 'or', 'but', 'nor', 'so', 'yet', 'for', 'to', 'of', 'in',
+  'on', 'at', 'by', 'with', 'about', 'against', 'between', 'into', 'through', 'during',
+  'before', 'after', 'above', 'below', 'from', 'up', 'down', 'out', 'off', 'over',
+  'under', 'again', 'further', 'then', 'once', 'as', 'if', 'than', 'because', 'while',
+  'until', 'unless', 'though', 'although', 'per', 'via', 'upon',
+  // pronouns
+  'i', 'me', 'my', 'mine', 'myself', 'we', 'us', 'our', 'ours', 'ourselves', 'you',
+  'your', 'yours', 'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she',
+  'her', 'hers', 'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 'theirs',
+  'themselves', 'this', 'that', 'these', 'those', 'who', 'whom', 'whose', 'which',
+  'what', 'whatever', 'whoever', 'anyone', 'someone', 'everyone', 'anybody', 'somebody',
+  'everybody', 'anything', 'something', 'everything', 'nothing', 'one', 'ones',
+  // be/have/do auxiliaries + modal verbs
+  'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+  'having', 'do', 'does', 'did', 'doing', 'done', 'will', 'would', 'shall', 'should',
+  'can', 'could', 'may', 'might', 'must', 'need', 'ought',
+  // negation / contraction artifacts (apostrophe stripped by the tokenizer, e.g. "don't" -> "don")
+  'not', 'no', 'nor', 'don', 'doesn', 'didn', 'isn', 'aren', 'wasn', 'weren', 'won',
+  'wouldn', 'shouldn', 'couldn', 'can', 'cannot', 'ain', 'hasn', 'haven', 'hadn',
+  'mightn', 'mustn', 'needn', 'shan', 'll', 've', 're', 'ts', 'nt', 'im', 'youre',
+  // common filler / generic verbs and words that leak through as false "trends"
+  'just', 'like', 'get', 'got', 'getting', 'go', 'going', 'went', 'gone', 'make',
+  'made', 'making', 'use', 'used', 'using', 'uses', 'know', 'knew', 'known', 'think',
+  'thought', 'thinks', 'want', 'wanted', 'wants', 'say', 'said', 'says', 'see', 'saw',
+  'seen', 'look', 'looking', 'looks', 'come', 'came', 'coming', 'take', 'took', 'taken',
+  'give', 'gave', 'given', 'find', 'found', 'tell', 'told', 'ask', 'asked', 'work',
+  'works', 'working', 'seem', 'seems', 'seemed', 'feel', 'feels', 'felt', 'try',
+  'tried', 'trying', 'let', 'put', 'really', 'still', 'also', 'even', 'much', 'many',
+  'more', 'most', 'other', 'others', 'some', 'any', 'all', 'both', 'each', 'few',
+  'own', 'same', 'such', 'too', 'very', 'now', 'here', 'there', 'when', 'where',
+  'why', 'how', 'well', 'good', 'bad', 'new', 'old', 'lot', 'lots', 'thing', 'things',
+  'way', 'ways', 'time', 'times', 'day', 'days', 'year', 'years', 'people', 'someth',
+  'page', 'pages', 'post', 'posts', 'comment', 'comments', 'thread', 'sub', 'reddit',
+  'yeah', 'yep', 'ok', 'okay', 'oh', 'hi', 'hey', 'hello', 'thanks', 'thank', 'please',
+  'sure', 'maybe', 'actually', 'basically', 'literally', 'kind', 'sort', 'bit', 'stuff',
 ]);
 
 function ngrams(text: string): string[] {
@@ -132,9 +163,22 @@ export function scoreBurstTerms(
 }
 
 /**
- * Computes burst scores from posts and upserts the ranked result into `trends`.
+ * Computes burst scores from posts and makes `trends` authoritatively reflect the
+ * current sweep: upserts every ranked term, then DELETEs any row not part of this
+ * sweep's result set (including stale seed rows like seed-t1/seed-t2/seed-t3, and
+ * any term that has aged out of the current window). This means the sweep is the
+ * sole source of truth for what's in the table, not an additive upsert -- a term
+ * that stops bursting stops appearing, rather than sitting at a stale score forever.
+ *
+ * `findings.trend_id` has no FK/cascade defined in the schema, so a deleted trend id
+ * simply becomes an orphaned reference on any pre-existing finding row; nothing
+ * violates the grounding invariant on findings.quote/post_id since those never
+ * pointed at the trends table. GET /api/trends/:id already returns null/404 for an
+ * id with no matching row, so lookups on a deleted seed id fail gracefully.
+ *
  * Returns the number of trend rows written. Throws if it finds zero terms above the
- * absolute-count floor (fail loud, not a silent empty table).
+ * absolute-count floor (fail loud, not a silent empty table) -- and in that failure
+ * case leaves the existing `trends` table untouched rather than wiping it out.
  */
 export function detectTrends(db: Database.Database): number {
   const { recentStart, priorStart, nowIso } = burstWindow();
@@ -144,6 +188,11 @@ export function detectTrends(db: Database.Database): number {
     .all(priorStart) as { text: string; posted_at: string }[];
 
   const ranked = scoreBurstTerms(posts, { recentStart, priorStart, nowIso });
+
+  if (ranked.length === 0) {
+    // Fail loud without wiping the table -- runDetect throws on this below.
+    return 0;
+  }
 
   const upsert = db.prepare(`
     insert into trends (id, term, recent_count, prior_count, score, window_start, window_end)
@@ -157,9 +206,12 @@ export function detectTrends(db: Database.Database): number {
   `);
 
   const tx = db.transaction((rows: typeof ranked) => {
+    const currentIds: string[] = [];
     for (const r of rows) {
+      const id = `trend-${r.term.replace(/\s+/g, '-')}`;
+      currentIds.push(id);
       upsert.run({
-        id: `trend-${r.term.replace(/\s+/g, '-')}`,
+        id,
         term: r.term,
         recent: r.recent,
         prior: r.prior,
@@ -168,6 +220,9 @@ export function detectTrends(db: Database.Database): number {
         window_end: nowIso,
       });
     }
+    // Authoritative: anything not in this sweep's result set (stale terms, seed rows) goes.
+    const placeholders = currentIds.map(() => '?').join(',');
+    db.prepare(`delete from trends where id not in (${placeholders})`).run(...currentIds);
   });
   tx(ranked);
 

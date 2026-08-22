@@ -184,6 +184,63 @@ test('competitors flow: no params leaves behavior unchanged from before industry
   assert.ok(Array.isArray(j.snapshots));
 });
 
+test('trends flow: /:id timeline is zero-filled daily across the window, not omitted', async () => {
+  // Use whatever real trend currently tops the sweep, not a hardcoded seed id -- the
+  // trends table is authoritative over the current sweep (src/detect/burst.ts) and
+  // seed-t1/t2/t3 are designed to be ephemeral, not to persist forever.
+  const list = await get('/api/trends');
+  const realId = list.trends[0].id;
+  const j = await get(`/api/trends/${realId}`);
+  assert.ok(Array.isArray(j.timeline) && j.timeline.length > 0, 'timeline should be present and non-empty');
+  const start = new Date(j.trend.window_start);
+  const end = new Date(j.trend.window_end);
+  const expectedDays = Math.floor((end - start) / 86400000) + 1;
+  assert.equal(j.timeline.length, expectedDays, 'timeline must have one entry per day across the window, zero-filled');
+  for (const point of j.timeline) {
+    assert.ok('date' in point && 'count' in point, 'each timeline point needs date and count');
+    assert.ok(typeof point.count === 'number' && point.count >= 0, 'count must be a non-negative number');
+  }
+  const total = j.timeline.reduce((sum, p) => sum + p.count, 0);
+  assert.ok(total > 0, 'at least one day should have a non-zero count for a real trend');
+});
+
+test('competitors flow: q= scopes to matching companies/snapshots, honest empty on no match', async () => {
+  const j = await get('/api/competitors?q=enterprise');
+  assert.equal(j.query, 'enterprise');
+  assert.ok(j.matched_companies > 0, 'enterprise should match at least one real company');
+  assert.equal(j.companies.length, j.matched_companies);
+  const empty = await get('/api/competitors?q=zzzznonexistentxyz');
+  assert.equal(empty.matched_companies, 0, 'an unmatched term must return an honest empty result, not an error');
+  assert.deepEqual(empty.companies, []);
+  assert.deepEqual(empty.snapshots, []);
+});
+
+test('competitors flow: LinkedIn profile snapshots are real, grounded company descriptions', async () => {
+  const j = await get('/api/competitors');
+  const profiles = j.snapshots.filter((s) => s.item_type === 'profile');
+  assert.ok(profiles.length > 0, 'at least one real LinkedIn profile snapshot should exist');
+  for (const p of profiles) {
+    assert.ok(p.value_text && p.value_text.length > 20, `profile ${p.id} should have a substantive description, not a placeholder`);
+    assert.ok(p.url && p.url.includes('linkedin.com'), `profile ${p.id} should cite a real LinkedIn url`);
+  }
+});
+
+test('chat flow: scope=competitor restricts retrieval away from trend/own posts', async () => {
+  const scoped = await fetch(new URL('/api/chat', BASE), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question: 'What about price?', scope: 'competitor' }),
+  }).then((r) => r.json());
+  assert.ok(scoped.citations.length > 0, 'scoped competitor question about price should find the real Asana price-increase post');
+  assert.equal(scoped.citations[0].post_id, 'seed-p7', 'scope=competitor should surface the competitor-sourced pricing post');
+  const unscoped = await fetch(new URL('/api/chat', BASE), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question: 'What about price?' }),
+  }).then((r) => r.json());
+  assert.notDeepEqual(unscoped.citations, scoped.citations, 'omitting scope must change retrieval/answer vs scope=competitor for this question');
+});
+
 test('chat flow: a question matching real data returns a grounded, verified answer', async () => {
   const res = await fetch(new URL('/api/chat', BASE), {
     method: 'POST',

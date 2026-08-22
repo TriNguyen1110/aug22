@@ -85,3 +85,6 @@ H+6.2	item	20	doing	backend	DATA	claimed: trends authoritative sweep + expand ST
 H+6.3	item	21	doing	frontend	SCREEN	starting search box on /trends
 H+6.3	item	22	doing	backend	DATA	build real auto-repair drill: --simulate-break + --repair for reddit ingest
 H+6.3	fact	auto_repair.mechanism	--simulate-break renames title/description->post_title/body_text on real cache, --repair adds alias fallback chain in normalize()	backend	-	src/ingest/reddit.ts, verified live: break run written=0 loud fail naming cause, repair run written=25
+H+6.3	item	22	review	backend	DATA	committed e10419f: verified live --simulate-break->loud fail(cause named)->--repair->25/25 recovered, posts count unaffected, smoke 13/14 (1 pre-existing unrelated item-20 gap), test:backend flaky on slow chat/LLM calls only (unrelated to this change)
+H+6.4	item	20	review	backend	DATA	trends table now authoritative (stale seed rows cleared), stopwords expanded, ad-hoc AI posts removed, committed next
+H+6.4	item	21	review	frontend	SCREEN	trends search box added, wired to GET /api/trends?q=, committed next
