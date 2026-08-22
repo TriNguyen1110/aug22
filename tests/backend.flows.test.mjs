@@ -3,11 +3,16 @@
  * no signin, no session — this product has none, and the last test below asserts
  * that stays true. Run with: node --test tests/backend.flows.test.mjs
  *
- * These are success-path only, per CLAUDE.md's hackathon scope. Failure-path and
- * auto-repair behavior is covered by scrape-doctor, not here.
+ * These are success-path only, per CLAUDE.md's hackathon scope, with one deliberate
+ * exception: the auto-repair drill below, which is itself the demoed success path
+ * (detect the break loudly, then repair and recover records) called out in CLAUDE.md
+ * as never-cut. Ad hoc scrape-doctor investigation is a separate concern from this
+ * standing regression test.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import Database from 'better-sqlite3';
 
 const BASE = process.env.SMOKE_BASE ?? 'http://localhost:3000';
 
@@ -95,6 +100,43 @@ test('trends search: a term with no matches returns an honest empty result, not 
   assert.deepEqual(j.trends, []);
   assert.deepEqual(j.findings, []);
   assert.deepEqual(j.posts, []);
+});
+
+test('trends search: burst ranking prefers real multi-word phrases over single stopword-adjacent words', async () => {
+  const j = await get('/api/trends');
+  // Not asserting specific terms (corpus-dependent, would be flaky) -- asserting the
+  // shape of the fix: among the top few ranked global trends, at least one is a real
+  // 2-3 word phrase, not just single words winning on raw frequency alone.
+  const top = j.trends.slice(0, 10);
+  assert.ok(top.length > 0, 'global trends should not be empty');
+  const hasPhrase = top.some((t) => t.term.includes(' '));
+  assert.ok(hasPhrase, `expected at least one multi-word phrase in the top 10 trends, got: ${top.map((t) => t.term).join(', ')}`);
+});
+
+test('trends search: q= includes a related array, grounded when non-empty', async () => {
+  const j = await get('/api/trends?q=notion');
+  assert.ok(Array.isArray(j.related), 'related must always be an array, even when empty (missing key / LLM failure)');
+  for (const r of j.related) {
+    assert.equal(typeof r.term, 'string');
+    assert.equal(typeof r.recent_count, 'number');
+    assert.equal(typeof r.prior_count, 'number');
+    assert.equal(typeof r.score, 'number');
+  }
+  // Any finding grounded by a related term follows the exact same verbatim-quote
+  // rule as every other finding -- check every finding returned by this request,
+  // not just the ones tied to the direct-match trends.
+  for (const f of j.findings) {
+    const post = j.posts.find((p) => p.id === f.post_id);
+    assert.ok(post, `finding ${f.id} must cite a post present in the response`);
+    assert.ok(post.text.includes(f.quote), `finding ${f.id} quote must be verbatim in the post text`);
+  }
+});
+
+test('trends search: related expansion still returns an array (possibly non-empty) even when matched_posts is 0', async () => {
+  const j = await get('/api/trends?q=zzz_no_such_term_xyz123');
+  assert.equal(j.matched_posts, 0);
+  assert.deepEqual(j.trends, []);
+  assert.ok(Array.isArray(j.related), 'related must be present as an array even on a zero-match query');
 });
 
 test('trends flow with no q param is unchanged: reads the global trends table', async () => {
@@ -324,6 +366,39 @@ test('chat flow: answer text never asserts a claim whose citation was dropped fo
     checked = true;
   }
   assert.ok(checked, 'at least one question must have been exercised');
+});
+
+test('auto-repair drill: simulate-break fails loudly with 0 records, --repair recovers all of them, DB untouched throughout', () => {
+  const dbPath = process.env.DB_PATH ?? './data/app.db';
+  const countPosts = () => new Database(dbPath, { readonly: true }).prepare('select count(*) as n from posts').get().n;
+
+  const before = countPosts();
+
+  // Stage 1: break, no repair -> non-zero exit, records_extracted 0, loud diagnostic.
+  let brokeLoudly = false;
+  let brokenOutput = '';
+  try {
+    execFileSync('node', ['--env-file=.env.local', '--import', 'tsx', 'src/ingest/reddit.ts', '--simulate-break'], {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+  } catch (err) {
+    brokeLoudly = true;
+    brokenOutput = (err.stderr || '') + (err.stdout || '');
+  }
+  assert.ok(brokeLoudly, '--simulate-break without --repair must exit non-zero');
+  assert.match(brokenOutput, /records_extracted is 0/, 'failure must name the zero-record symptom');
+  assert.match(brokenOutput, /field mapping changed shape/i, 'failure must name the likely cause (field mapping change)');
+  assert.equal(countPosts(), before, 'a failed ingest must not modify posts');
+
+  // Stage 2: same broken cache, with --repair -> succeeds, recovers all 25 records.
+  const repairedOutput = execFileSync(
+    'node',
+    ['--env-file=.env.local', '--import', 'tsx', 'src/ingest/reddit.ts', '--simulate-break', '--repair'],
+    { encoding: 'utf-8', stdio: 'pipe' },
+  );
+  assert.match(repairedOutput, /25 records from .*simulate-break/, '--repair must recover all 25 simulated-break records');
+  assert.equal(countPosts(), before, 'repair upserts the same real post ids/text, post count must be unchanged');
 });
 
 test('no main-flow route requires auth, a session, or credentials', async () => {
