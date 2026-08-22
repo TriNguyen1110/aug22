@@ -2,6 +2,7 @@ import './globals.css';
 import { Playfair_Display, Inter } from 'next/font/google';
 import { Providers } from './providers';
 import { SiteNav } from '../components/SiteNav';
+import { SiteFooter } from '../components/SiteFooter';
 
 const display = Playfair_Display({
   subsets: ['latin'],
@@ -25,10 +26,13 @@ export const metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`dark ${display.variable} ${body.variable}`}>
-      <body className="min-h-screen bg-ink text-[#dfe6e3] font-sans antialiased">
+      <body className="flex min-h-screen flex-col bg-ink text-[#dfe6e3] font-sans antialiased">
         <Providers>
           <SiteNav />
-          <div className="mx-auto max-w-5xl px-6 py-12">{children}</div>
+          <div className="mx-auto w-full max-w-5xl flex-1 px-6 py-16 sm:px-8 sm:py-20">
+            {children}
+          </div>
+          <SiteFooter />
         </Providers>
       </body>
     </html>

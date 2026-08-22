@@ -10,3 +10,4 @@ data/*.db-shm
 data/*.db-wal
 .screenshots/
 .playwright-mcp/
+tsconfig.tsbuildinfo

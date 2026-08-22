@@ -53,32 +53,32 @@ export default async function HomePage() {
   const brightGood = !!health && health.brightdata.records_extracted > 0;
 
   return (
-    <main>
-      <section className="mb-16">
+    <main className="space-y-16">
+      <section>
         <p className="mb-3 text-xs font-medium uppercase tracking-[0.2em] text-teal">
           Market intelligence
         </p>
-        <h1 className="font-display text-5xl font-semibold leading-tight tracking-tight text-[#eef1f0]">
+        <h1 className="font-display text-5xl font-semibold leading-tight tracking-tight text-[#eef1f0] sm:text-6xl">
           Notion Market Watch
         </h1>
-        <p className="mt-4 max-w-2xl text-lg leading-relaxed text-silver">
+        <p className="mt-5 max-w-2xl text-lg leading-relaxed text-silver">
           A statistics-first view of what people are saying about Notion, Linear, and
           Asana &mdash; every trend and finding traces back to a real, cited post.
         </p>
       </section>
 
-      <section className="grid gap-5 sm:grid-cols-3">
+      <section className="grid gap-6 sm:grid-cols-3">
         {cards.map((c) => {
           const Icon = c.icon;
           return (
             <Card key={c.href} className="glass-card bg-transparent">
-              <CardHeader className="flex items-center gap-2.5 pb-0">
+              <CardHeader className="flex items-center gap-2.5 p-6 pb-0">
                 <Icon className="h-4 w-4 text-forest-bright" strokeWidth={1.6} />
                 <Link href={c.href} className="font-display text-xl font-semibold text-[#eef1f0]">
                   {c.title}
                 </Link>
               </CardHeader>
-              <CardBody>
+              <CardBody className="p-6">
                 <p className="text-sm leading-relaxed text-silver">{c.description}</p>
                 <Link
                   href={c.href}
@@ -92,26 +92,27 @@ export default async function HomePage() {
         })}
       </section>
 
-      <Divider className="my-12 divider-hair" />
+      <Divider className="divider-hair" />
 
-      <section className="mb-6">
-        <h2 className="font-display text-2xl font-semibold tracking-tight text-[#eef1f0]">
-          Naive fetch vs. Bright Data
-        </h2>
-        <p className="mt-2 max-w-2xl text-silver">
-          What happens when you hit the source directly with a plain HTTP request, versus
-          going through the ingest pipeline. Live from <code className="text-silver-dim">/api/pipeline-health</code>.
-        </p>
-      </section>
+      <section className="space-y-12">
+        <div>
+          <h2 className="font-display text-2xl font-semibold tracking-tight text-[#eef1f0]">
+            Naive fetch vs. Bright Data
+          </h2>
+          <p className="mt-3 max-w-2xl text-silver">
+            What happens when you hit the source directly with a plain HTTP request, versus
+            going through the ingest pipeline. Live from <code className="text-silver-dim">/api/pipeline-health</code>.
+          </p>
+        </div>
 
-      {!health && (
-        <p className="text-red-400">Could not load pipeline health.</p>
-      )}
+        {!health && (
+          <p className="text-red-400">Could not load pipeline health.</p>
+        )}
 
-      {health && (
-        <section className="grid gap-5 sm:grid-cols-2">
+        {health && (
+        <div className="grid gap-6 sm:grid-cols-2">
           <Card className={`glass-card bg-transparent ${naiveOk ? '' : 'border-red-500/30'}`}>
-            <CardHeader className="flex items-center justify-between pb-0">
+            <CardHeader className="flex items-center justify-between p-6 pb-0">
               <span className="font-display text-lg font-semibold text-[#eef1f0]">Naive fetch</span>
               <Chip
                 size="sm"
@@ -121,8 +122,8 @@ export default async function HomePage() {
                 {naiveOk ? 'usable' : 'blocked / empty'}
               </Chip>
             </CardHeader>
-            <CardBody>
-              <dl className="space-y-2.5 text-sm">
+            <CardBody className="p-6">
+              <dl className="space-y-3 text-sm">
                 <div className="flex justify-between gap-4">
                   <dt className="text-silver-dim">URL</dt>
                   <dd className="break-all text-right font-mono text-xs text-silver">
@@ -154,7 +155,7 @@ export default async function HomePage() {
           </Card>
 
           <Card className={`glass-card bg-transparent ${brightGood ? 'border-forest/40' : ''}`}>
-            <CardHeader className="flex items-center justify-between pb-0">
+            <CardHeader className="flex items-center justify-between p-6 pb-0">
               <span className="font-display text-lg font-semibold text-[#eef1f0]">Bright Data pipeline</span>
               <Chip
                 size="sm"
@@ -164,8 +165,8 @@ export default async function HomePage() {
                 {brightGood ? 'records extracted' : 'no records'}
               </Chip>
             </CardHeader>
-            <CardBody>
-              <dl className="space-y-2.5 text-sm">
+            <CardBody className="p-6">
+              <dl className="space-y-3 text-sm">
                 <div className="flex justify-between gap-4">
                   <dt className="text-silver-dim">Live attempt made</dt>
                   <dd className="text-silver">
@@ -189,8 +190,9 @@ export default async function HomePage() {
               </dl>
             </CardBody>
           </Card>
-        </section>
-      )}
+        </div>
+        )}
+      </section>
     </main>
   );
 }

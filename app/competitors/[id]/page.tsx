@@ -1,5 +1,6 @@
 import { Card, CardBody, Link } from '@heroui/react';
 import { ArrowLeft } from 'lucide-react';
+import { FindingCard } from '../../../components/FindingCard';
 
 type Company = {
   id: string;
@@ -63,85 +64,74 @@ export default async function CompetitorDetailPage({ params }: { params: { id: s
   const postById = new Map(posts.map((p) => [p.id, p]));
 
   return (
-    <main>
-      <Link href="/competitors" className="inline-flex items-center gap-1.5 text-sm text-silver hover:text-teal">
-        <ArrowLeft className="h-3.5 w-3.5" /> Back to competitors
-      </Link>
-      {error && <p className="mt-6 text-red-400">Could not load company: {error}</p>}
-      {!error && !company && <p className="mt-6 text-silver-dim">Company not found.</p>}
+    <main className="space-y-12">
+      <div>
+        <Link href="/competitors" className="inline-flex items-center gap-1.5 text-sm text-silver hover:text-teal">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to competitors
+        </Link>
+      </div>
+      {error && <p className="text-red-400">Could not load company: {error}</p>}
+      {!error && !company && <p className="text-silver-dim">Company not found.</p>}
       {company && (
         <>
-          <h1 className="mt-5 font-display text-4xl font-semibold tracking-tight text-[#eef1f0]">
-            {company.name}
-          </h1>
-          <p className="mt-2 text-silver-dim">{company.domain}</p>
+          <section>
+            <h1 className="font-display text-4xl font-semibold tracking-tight text-[#eef1f0] sm:text-5xl">
+              {company.name}
+            </h1>
+            <p className="mt-2 text-silver-dim">{company.domain}</p>
+          </section>
 
-          <h2 className="mt-10 font-display text-xl font-semibold text-[#eef1f0]">Snapshots</h2>
-          {snapshots.length === 0 && <p className="mt-2 text-silver-dim">No snapshots yet.</p>}
-          {snapshots.length > 0 && (
-            <Card className="glass-card mt-4 bg-transparent">
-              <CardBody className="overflow-x-auto p-0">
-                <table className="w-full border-collapse text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-silver/10 text-xs uppercase tracking-wide text-silver-dim">
-                      <th className="px-5 py-4 font-medium">Type</th>
-                      <th className="px-5 py-4 font-medium">Label</th>
-                      <th className="px-5 py-4 font-medium">Value</th>
-                      <th className="px-5 py-4 font-medium">Source</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {snapshots.map((s) => (
-                      <tr key={s.id} className="border-b border-silver/5 last:border-0 transition-colors hover:bg-white/[0.03]">
-                        <td className="px-5 py-4 text-silver">{s.item_type}</td>
-                        <td className="px-5 py-4 text-silver">{s.label}</td>
-                        <td className="px-5 py-4 text-silver">{s.value_text}</td>
-                        <td className="px-5 py-4">
-                          <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm text-teal hover:text-teal-dim">
-                            link
-                          </Link>
-                        </td>
+          <section>
+            <h2 className="font-display text-2xl font-semibold text-[#eef1f0]">Snapshots</h2>
+            {snapshots.length === 0 && <p className="mt-3 text-silver-dim">No snapshots yet.</p>}
+            {snapshots.length > 0 && (
+              <Card className="glass-card mt-6 bg-transparent">
+                <CardBody className="overflow-x-auto p-0">
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-silver/10 text-xs uppercase tracking-wide text-silver-dim">
+                        <th className="px-6 py-5 font-medium">Type</th>
+                        <th className="px-6 py-5 font-medium">Label</th>
+                        <th className="px-6 py-5 font-medium">Value</th>
+                        <th className="px-6 py-5 font-medium">Source</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardBody>
-            </Card>
-          )}
+                    </thead>
+                    <tbody>
+                      {snapshots.map((s) => (
+                        <tr key={s.id} className="border-b border-silver/5 last:border-0 transition-colors hover:bg-white/[0.03]">
+                          <td className="px-6 py-5 text-silver">{s.item_type}</td>
+                          <td className="px-6 py-5 text-silver">{s.label}</td>
+                          <td className="px-6 py-5 text-silver">{s.value_text}</td>
+                          <td className="px-6 py-5">
+                            <Link href={s.url} target="_blank" rel="noreferrer" className="text-sm text-teal hover:text-teal-dim">
+                              link
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </CardBody>
+              </Card>
+            )}
+          </section>
 
-          <h2 className="mt-10 font-display text-xl font-semibold text-[#eef1f0]">Findings</h2>
-          {findings.length === 0 && <p className="mt-2 text-silver-dim">No findings yet.</p>}
-          <ul className="mt-5 space-y-4">
-            {findings.map((f) => {
-              const post = postById.get(f.post_id);
-              return (
-                <li key={f.id}>
-                  <Card className="glass-card bg-transparent">
-                    <CardBody>
-                      <p className="text-[#eef1f0]">{f.claim}</p>
-                      <blockquote className="mt-3 border-l-2 border-teal/40 pl-3 italic text-silver">
-                        &quot;{f.quote}&quot;
-                      </blockquote>
-                      {post ? (
-                        <Link
-                          href={post.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-3 inline-block text-sm text-teal hover:text-teal-dim"
-                        >
-                          Source: {post.platform} / {post.author}
-                        </Link>
-                      ) : (
-                        <span className="mt-3 inline-block text-sm text-silver-dim">
-                          Source post unavailable
-                        </span>
-                      )}
-                    </CardBody>
-                  </Card>
-                </li>
-              );
-            })}
-          </ul>
+          <section>
+            <h2 className="font-display text-2xl font-semibold text-[#eef1f0]">Findings</h2>
+            {findings.length === 0 && <p className="mt-3 text-silver-dim">No findings yet.</p>}
+            {findings.length > 0 && (
+              <ul className="mt-6 space-y-6">
+                {findings.map((f) => {
+                  const post = postById.get(f.post_id);
+                  return (
+                    <li key={f.id}>
+                      <FindingCard finding={f} post={post} />
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
         </>
       )}
     </main>

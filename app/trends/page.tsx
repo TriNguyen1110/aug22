@@ -30,37 +30,41 @@ export default async function TrendsPage() {
   const sorted = [...trends].sort((a, b) => b.score - a.score);
 
   return (
-    <main>
-      <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-teal">Discourse</p>
-      <h1 className="font-display text-4xl font-semibold tracking-tight text-[#eef1f0]">Trends</h1>
-      <p className="mt-3 text-silver">
-        Burst-detected discourse, ranked by recent-count / prior-count.
-      </p>
-      {error && <p className="mt-6 text-red-400">Could not load trends: {error}</p>}
-      {!error && sorted.length === 0 && <p className="mt-6 text-silver-dim">No trends yet.</p>}
+    <main className="space-y-12">
+      <section>
+        <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-teal">Discourse</p>
+        <h1 className="font-display text-4xl font-semibold tracking-tight text-[#eef1f0] sm:text-5xl">
+          Trends
+        </h1>
+        <p className="mt-4 max-w-2xl text-lg leading-relaxed text-silver">
+          Burst-detected discourse, ranked by recent-count / prior-count.
+        </p>
+      </section>
+      {error && <p className="text-red-400">Could not load trends: {error}</p>}
+      {!error && sorted.length === 0 && <p className="text-silver-dim">No trends yet.</p>}
       {sorted.length > 0 && (
-        <Card className="glass-card mt-8 bg-transparent">
+        <Card className="glass-card bg-transparent">
           <CardBody className="overflow-x-auto p-0">
             <table className="w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-silver/10 text-xs uppercase tracking-wide text-silver-dim">
-                  <th className="px-5 py-4 font-medium">Term</th>
-                  <th className="px-5 py-4 font-medium">Recent count</th>
-                  <th className="px-5 py-4 font-medium">Prior count</th>
-                  <th className="px-5 py-4 font-medium">Score</th>
+                  <th className="px-6 py-5 font-medium">Term</th>
+                  <th className="px-6 py-5 font-medium">Recent count</th>
+                  <th className="px-6 py-5 font-medium">Prior count</th>
+                  <th className="px-6 py-5 font-medium">Score</th>
                 </tr>
               </thead>
               <tbody>
                 {sorted.map((t) => (
                   <tr key={t.id} className="border-b border-silver/5 last:border-0 transition-colors hover:bg-white/[0.03]">
-                    <td className="px-5 py-4">
+                    <td className="px-6 py-5">
                       <Link href={`/trends/${t.id}`} className="font-medium text-[#eef1f0] hover:text-teal">
                         {t.term}
                       </Link>
                     </td>
-                    <td className="px-5 py-4 text-silver">{t.recent_count}</td>
-                    <td className="px-5 py-4 text-silver">{t.prior_count}</td>
-                    <td className="px-5 py-4">
+                    <td className="px-6 py-5 text-silver">{t.recent_count}</td>
+                    <td className="px-6 py-5 text-silver">{t.prior_count}</td>
+                    <td className="px-6 py-5">
                       <Chip size="sm" variant="flat" className="chip-score">
                         {t.score.toFixed(2)}
                       </Chip>
