@@ -45,6 +45,11 @@ const SUBREDDITS = Object.keys(SUBREDDIT_MAP);
 
 // Bright Data Reddit collector record shape. Loose on purpose: validate only the
 // fields this pipeline actually reads, since the collector may add fields over time.
+// post_title / body_text are NOT real Bright Data field names -- they exist here only
+// so the schema does not silently strip them when --simulate-break renames title/
+// description to those names (see docs/AUTO_REPAIR.md). Zod strips unknown keys by
+// default, and the whole point of the drill is that the renamed fields survive
+// validation but fail to normalize, exactly like a real upstream shape change would.
 const RedditRecord = z.object({
   id: z.string().optional(),
   post_id: z.string().optional(),
@@ -52,8 +57,10 @@ const RedditRecord = z.object({
   user_posted: z.string().optional(),
   author: z.string().optional(),
   title: z.string().optional(),
+  post_title: z.string().optional(),
   description: z.string().optional(),
   text: z.string().optional(),
+  body_text: z.string().optional(),
   community_name: z.string().optional(),
   subreddit: z.string().optional(),
   date_posted: z.string().optional(),
@@ -62,9 +69,31 @@ const RedditRecord = z.object({
 const RedditPayload = z.array(RedditRecord);
 type RedditRecord = z.infer<typeof RedditRecord>;
 
-function normalize(rec: RedditRecord) {
+// Repair map: for each logical field, the ordered list of field names normalize()
+// will accept once --repair is passed. `title` and `description` are the pre-break
+// names; `post_title`/`body_text` are the field names simulate-break renames them to.
+// This is a targeted, explicit fix for one known break, not a speculative catch-all --
+// per CLAUDE.md, no abstraction beyond what the demo needs.
+const REPAIR_ALIASES = {
+  title: ['title', 'post_title'] as const,
+  description: ['description', 'text', 'body_text'] as const,
+};
+
+function pick(rec: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const k of keys) {
+    const v = rec[k];
+    if (typeof v === 'string' && v) return v;
+  }
+  return undefined;
+}
+
+function normalize(rec: RedditRecord, opts: { repair: boolean } = { repair: false }) {
   const id = rec.id ?? rec.post_id;
-  const text = [rec.title, rec.description ?? rec.text].filter(Boolean).join('\n\n').trim();
+  const title = opts.repair ? pick(rec as Record<string, unknown>, REPAIR_ALIASES.title) : rec.title;
+  const description = opts.repair
+    ? pick(rec as Record<string, unknown>, REPAIR_ALIASES.description)
+    : rec.description ?? rec.text;
+  const text = [title, description].filter(Boolean).join('\n\n').trim();
   const author = rec.user_posted ?? rec.author ?? 'unknown';
   const subreddit = (rec.community_name ?? rec.subreddit ?? '').toLowerCase().replace(/^r\//, '');
   const posted_at = rec.date_posted ?? rec.created_at ?? new Date().toISOString();
@@ -277,10 +306,16 @@ function ingestNormalizedRecords(
   return written;
 }
 
+// Matches only the plain daily sweep cache, e.g. reddit-2026-08-22.json -- excludes
+// reddit-chat-*.json (per-question targeted fetches) and reddit-simulated-break-*.json
+// (the deliberately mutated drill artifact), so --cached and the simulate-break source
+// selection never accidentally pick up a chat fetch or a previous break as "the real data".
+const REAL_CACHE_RE = /^reddit-\d{4}-\d{2}-\d{2}\.json$/;
+
 function loadMostRecentCache(): { path: string; data: unknown } {
   mkdirSync(RAW_DIR, { recursive: true });
   const files = readdirSync(RAW_DIR)
-    .filter((f) => f.startsWith(`${PLATFORM}-`) && f.endsWith('.json'))
+    .filter((f) => REAL_CACHE_RE.test(f))
     .sort()
     .reverse();
   if (files.length === 0) {
@@ -290,15 +325,45 @@ function loadMostRecentCache(): { path: string; data: unknown } {
   return { path, data: JSON.parse(readFileSync(path, 'utf-8')) };
 }
 
-export async function ingestReddit(opts: { cached: boolean }) {
+/**
+ * Loads the most recent real (non-simulated, non-chat) cached payload and rewrites
+ * two field names to simulate a plausible upstream shape change: `title` -> `post_title`
+ * and `description` -> `body_text`. Writes the mutated payload to its own cache file
+ * (never overwrites the real one) so the break is honestly reproducible on demand.
+ * See docs/AUTO_REPAIR.md for the full demo sequence this feeds.
+ */
+function writeSimulatedBreakCache(): string {
+  const { path, data } = loadMostRecentCache();
+  const records = data as Array<Record<string, unknown>>;
+  if (!Array.isArray(records) || records.length === 0) {
+    throw new Error(`cannot simulate a break: ${path} has no records to mutate`);
+  }
+  const mutated = records.map((rec) => {
+    const { title, description, ...rest } = rec;
+    return { ...rest, post_title: title, body_text: description };
+  });
+  const iso = new Date().toISOString();
+  mkdirSync(RAW_DIR, { recursive: true });
+  const outPath = join(RAW_DIR, `reddit-simulated-break-${iso.slice(0, 10)}.json`);
+  writeFileSync(outPath, JSON.stringify(mutated, null, 2));
+  console.log(`[ingest:reddit] simulated a shape break: title->post_title, description->body_text (${mutated.length} records), sourced from ${path}`);
+  console.log(`[ingest:reddit] wrote ${outPath}`);
+  return outPath;
+}
+
+export async function ingestReddit(opts: { cached: boolean; simulateBreak?: boolean; repair?: boolean }) {
   return withSpan('ingest.reddit', async (span) => {
     span.setAttr('platform', PLATFORM);
-    span.setAttr('mode', opts.cached ? 'cached' : 'live');
+    span.setAttr('mode', opts.simulateBreak ? 'simulate-break' : opts.cached ? 'cached' : 'live');
+    span.setAttr('repair', String(Boolean(opts.repair)));
 
     let raw: unknown;
     let cachePathUsed: string;
 
-    if (opts.cached) {
+    if (opts.simulateBreak) {
+      cachePathUsed = writeSimulatedBreakCache();
+      raw = JSON.parse(readFileSync(cachePathUsed, 'utf-8'));
+    } else if (opts.cached) {
       const { path, data } = loadMostRecentCache();
       raw = data;
       cachePathUsed = path;
@@ -338,7 +403,7 @@ export async function ingestReddit(opts: { cached: boolean }) {
     let written = 0;
     const tx = db.transaction((records: RedditRecord[]) => {
       for (const rec of records) {
-        const n = normalize(rec);
+        const n = normalize(rec, { repair: Boolean(opts.repair) });
         if (!n.id || !n.text) continue; // no stable join key or nothing to say, skip
         const mapping = SUBREDDIT_MAP[n.subreddit] ?? { source_type: 'trend' as const, company_id: null };
         upsert.run({
@@ -363,20 +428,40 @@ export async function ingestReddit(opts: { cached: boolean }) {
 
     if (written === 0) {
       // Grounding rule: a 200 with zero rows is the expected failure mode, not a
-      // warning. Fail loudly regardless of HTTP status.
-      span.setAttr('failure_reason', 'records_extracted is 0');
-      throw new Error('records_extracted is 0: fetch succeeded but produced no usable rows');
+      // warning. Fail loudly regardless of HTTP status. Before throwing, run the
+      // same cheap heuristic scrape-doctor step 3 documents ("did the field mapping
+      // change shape") so the failure message names a likely cause instead of just
+      // reporting the symptom -- the count would otherwise be all a human has to go on.
+      const hadRows = parsed.data.length > 0;
+      const anyKnownFieldPresent = parsed.data.some((r) => r.title || r.description || r.text);
+      const anyAliasFieldPresent = parsed.data.some((r) => r.post_title || r.body_text);
+      let cause = 'unknown -- run scrape-doctor against ' + cachePathUsed;
+      if (hadRows && !anyKnownFieldPresent && anyAliasFieldPresent) {
+        cause = `field mapping changed shape: ${cachePathUsed} has records but none carry the expected title/description/text keys, while post_title/body_text (unmapped alias fields) are present -- likely upstream renamed the field. Re-run with --repair once confirmed.`;
+      } else if (hadRows && !anyKnownFieldPresent) {
+        cause = `field mapping changed shape: ${cachePathUsed} has ${parsed.data.length} record(s) but none carry a title/description/text field normalize() reads -- check for an upstream rename.`;
+      } else if (!hadRows) {
+        cause = `empty payload: ${cachePathUsed} contained 0 records after schema validation -- check for a bot wall or rate limit, not a mapping change.`;
+      }
+      span.setAttr('failure_reason', `records_extracted is 0: ${cause}`);
+      throw new Error(`records_extracted is 0: fetch succeeded but produced no usable rows. Likely cause: ${cause}`);
     }
 
-    console.log(`[ingest:reddit] ${written} records from ${cachePathUsed} (${opts.cached ? 'cached' : 'live'})`);
+    console.log(`[ingest:reddit] ${written} records from ${cachePathUsed} (${opts.simulateBreak ? 'simulate-break' : opts.cached ? 'cached' : 'live'}${opts.repair ? ', repair applied' : ''})`);
     return { skipped: false, records_extracted: written, cache_path: cachePathUsed };
   });
 }
 
 // CLI entry point.
+//
+// Auto-repair demo sequence (see docs/AUTO_REPAIR.md for the full walkthrough):
+//   bun run src/ingest/reddit.ts --simulate-break            # break: renamed fields, expect loud failure naming the cause
+//   bun run src/ingest/reddit.ts --simulate-break --repair   # repair: same cache, expanded field-alias map, succeeds
 if (process.argv[1] && process.argv[1].endsWith('reddit.ts')) {
   const cached = process.argv.includes('--cached');
-  ingestReddit({ cached })
+  const simulateBreak = process.argv.includes('--simulate-break');
+  const repair = process.argv.includes('--repair');
+  ingestReddit({ cached, simulateBreak, repair })
     .then((result) => {
       console.log('[ingest:reddit] summary', result);
       process.exit(0);
