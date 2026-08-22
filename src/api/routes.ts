@@ -7,6 +7,7 @@
 import type Database from 'better-sqlite3';
 import { readdirSync } from 'node:fs';
 import { withSpan } from '../otel';
+import { burstWindow, scoreBurstTerms } from '../detect/burst';
 
 export async function getHealth(db: Database.Database) {
   return withSpan('api.health', async (span) => {
@@ -26,6 +27,112 @@ export async function getTrends(db: Database.Database) {
     const trends = db.prepare('select * from trends order by score desc').all();
     span.setRecordCount(trends.length);
     return { trends };
+  });
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Finds a verbatim substring of `text` matching `term` (which may be a 1-3 word
+ * n-gram produced with punctuation stripped and lowercased). Builds a case-insensitive
+ * regex that tolerates whatever punctuation/whitespace actually separates the words in
+ * the original text, then returns the literal matched slice of `text` itself -- never a
+ * reconstructed string -- so the CONTRACT grounding invariant (quote is a verbatim
+ * substring of posts.text) holds by construction.
+ */
+function findVerbatimQuote(term: string, text: string): string | null {
+  const words = term.split(' ').filter(Boolean).map(escapeRegex);
+  if (words.length === 0) return null;
+  const pattern = new RegExp(words.join('[^a-zA-Z0-9]+'), 'i');
+  const m = text.match(pattern);
+  return m ? m[0] : null;
+}
+
+interface PostRow {
+  id: string;
+  company_id: string | null;
+  source_type: string;
+  platform: string;
+  author: string;
+  url: string;
+  text: string;
+  posted_at: string;
+  fetched_at: string;
+}
+
+/**
+ * On-the-fly, unpersisted burst detection scoped to posts whose text matches `q`
+ * (case-insensitive substring, any source_type). Reuses the exact recent/prior/floor
+ * scoring in src/detect/burst.ts -- just fed a filtered post list instead of the
+ * global `source_type = 'trend'` sweep. Never writes to the `trends` table: that
+ * table stays the global unscoped view per CONTRACT.md. findings are generated at
+ * request time, each quote a verbatim substring of the post it cites (grounding
+ * invariant is not relaxed for the scoped path).
+ */
+export async function getTrendsSearch(db: Database.Database, rawQuery: string) {
+  return withSpan('api.trends.search', async (span) => {
+    const q = rawQuery.trim();
+    span.setAttr('query', q);
+    if (!q) {
+      span.setAttr('failure_reason', 'empty query');
+      return { query: rawQuery, matched_posts: 0, trends: [], findings: [], posts: [] };
+    }
+
+    const matched = db
+      .prepare(`select * from posts where text like '%' || ? || '%' collate nocase`)
+      .all(q) as PostRow[];
+
+    span.setRecordCount(matched.length);
+    if (matched.length === 0) {
+      span.setAttr('failure_reason', 'zero matched posts');
+      return { query: q, matched_posts: 0, trends: [], findings: [], posts: [] };
+    }
+
+    const window = burstWindow();
+    const ranked = scoreBurstTerms(
+      matched.map((p) => ({ text: p.text, posted_at: p.posted_at })),
+      window,
+      { minCount: 1, floorOn: 'total', relevanceTo: q },
+    );
+
+    const trends: Record<string, unknown>[] = [];
+    const findings: Record<string, unknown>[] = [];
+    const citedPosts = new Map<string, PostRow>();
+
+    for (const r of ranked) {
+      const trendId = `q-${q.toLowerCase().replace(/\s+/g, '-')}-${r.term.replace(/\s+/g, '-')}`;
+      trends.push({
+        id: trendId,
+        term: r.term,
+        recent_count: r.recent,
+        prior_count: r.prior,
+        score: r.score,
+        window_start: window.priorStart,
+        window_end: window.nowIso,
+      });
+
+      const citedPost = matched.find((p) => findVerbatimQuote(r.term, p.text));
+      if (!citedPost) continue; // no post literally contains this n-gram verbatim; skip rather than fabricate
+      const quote = findVerbatimQuote(r.term, citedPost.text)!;
+      citedPosts.set(citedPost.id, citedPost);
+
+      findings.push({
+        id: `f-${trendId}`,
+        post_id: citedPost.id,
+        trend_id: trendId,
+        company_id: citedPost.company_id,
+        use_case: 'trends',
+        claim: `"${r.term}" is trending in results for "${q}": ${r.recent} recent mention(s) vs ${r.prior} prior.`,
+        quote,
+        category: 'trend',
+        confidence: Math.min(1, r.score / 5),
+      });
+    }
+
+    span.setAttr('trends_found', trends.length);
+    return { query: q, matched_posts: matched.length, trends, findings, posts: [...citedPosts.values()] };
   });
 }
 

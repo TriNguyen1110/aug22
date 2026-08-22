@@ -45,6 +45,59 @@ test('trends flow: detail includes findings grounded in real posts', async () =>
   }
 });
 
+test('trends search: q= scopes to matching posts and grounds any findings it returns', async () => {
+  const j = await get('/api/trends?q=onboarding');
+  assert.equal(j.query, 'onboarding');
+  assert.ok(j.matched_posts > 0, 'matched_posts should be > 0 for a term known to be in the seed corpus');
+  assert.ok(Array.isArray(j.trends));
+  assert.ok(Array.isArray(j.findings));
+  assert.ok(Array.isArray(j.posts));
+  // Burst detection is floored on absolute recent-window count (src/detect/burst.ts);
+  // seed post dates are randomized per `npm run seed` run, so whether any term clears
+  // the floor for a narrow, single-term-match query varies run to run. Assert the
+  // grounding invariant unconditionally: whatever findings *are* returned, every quote
+  // must be a verbatim substring of the post it cites, and every cited post must be
+  // present in the response's posts array.
+  for (const f of j.findings) {
+    const post = j.posts.find((p) => p.id === f.post_id);
+    assert.ok(post, `finding ${f.id} must cite a post present in the response`);
+    assert.ok(post.text.includes(f.quote), `finding ${f.id} quote must be verbatim in the post text`);
+  }
+});
+
+test('trends search: a term shared by two seed posts scores independently of the global top-3', async () => {
+  const j = await get('/api/trends?q=italianbrainrot');
+  assert.equal(j.matched_posts, 2, 'exactly two seed posts mention italianbrainrot, independent of date randomization');
+  if (j.trends.length > 0) {
+    const global = await get('/api/trends');
+    const globalTerm = global.trends.find((t) => t.term === 'italianbrainrot');
+    const scoped = j.trends.find((t) => t.term === 'italianbrainrot');
+    assert.ok(scoped, 'scoped trends should include the searched term when it clears the floor');
+    if (globalTerm) {
+      assert.notEqual(scoped.recent_count, globalTerm.recent_count, 'scoped count is computed fresh, not copied from the seeded global trends table');
+    }
+    for (const f of j.findings) {
+      const post = j.posts.find((p) => p.id === f.post_id);
+      assert.ok(post, `finding ${f.id} must cite a post present in the response`);
+      assert.ok(post.text.includes(f.quote), `finding ${f.id} quote must be verbatim in the post text`);
+    }
+  }
+});
+
+test('trends search: a term with no matches returns an honest empty result, not an error', async () => {
+  const j = await get('/api/trends?q=zzz_no_such_term_xyz123');
+  assert.equal(j.matched_posts, 0);
+  assert.deepEqual(j.trends, []);
+  assert.deepEqual(j.findings, []);
+  assert.deepEqual(j.posts, []);
+});
+
+test('trends flow with no q param is unchanged: reads the global trends table', async () => {
+  const j = await get('/api/trends');
+  assert.ok(!('query' in j) && !('matched_posts' in j), 'unscoped /api/trends must not carry search-response keys');
+  assert.ok(Array.isArray(j.trends) && j.trends.length > 0);
+});
+
 test('competitors flow: list includes both tracked competitors with snapshots', async () => {
   const j = await get('/api/competitors');
   const names = j.companies.map((c) => c.name);
