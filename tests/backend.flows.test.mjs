@@ -229,6 +229,44 @@ test('monitoring flow: returns the target company\'s own posts and findings', as
   assert.ok(j.findings.length > 0, 'monitoring should have at least one finding');
 });
 
+test('competitor expansion (item 28): every listed competitor has real backing data, not just a bare company row', async () => {
+  const j = await get('/api/competitors');
+  const expanded = ['co-google', 'co-meta', 'co-xai'];
+  for (const id of expanded) {
+    const company = j.companies.find((c) => c.id === id);
+    assert.ok(company, `${id} must exist in /api/competitors companies`);
+    const snaps = j.snapshots.filter((s) => s.company_id === id);
+    const detail = await get(`/api/competitors/${id}`);
+    const hasBacking = snaps.length > 0 || detail.posts.length > 0;
+    assert.ok(
+      hasBacking,
+      `${id} must have at least one real competitor_snapshots row or post -- a company listed with zero backing data is a bare/unpopulated row, not a real tracked competitor`,
+    );
+  }
+});
+
+test('competitor insight (item 28): GET /api/competitors/:id insight, when present, cites only real verifiable sources', async () => {
+  const j = await get('/api/competitors');
+  const openai = j.companies.find((c) => c.id === 'co-openai');
+  assert.ok(openai, 'co-openai must exist for this check');
+  const detail = await get('/api/competitors/co-openai');
+  assert.ok(detail.insight, 'co-openai has enough real source material that insight should not be null');
+  assert.ok(Array.isArray(detail.insight.pros) && detail.insight.pros.length > 0, 'insight.pros should be non-empty');
+  assert.ok(Array.isArray(detail.insight.cons) && detail.insight.cons.length > 0, 'insight.cons should be non-empty');
+  assert.ok(Array.isArray(detail.insight.sources) && detail.insight.sources.length > 0, 'insight.sources should be non-empty');
+  const postSources = detail.insight.sources.filter((s) => s.kind === 'post');
+  assert.ok(postSources.length > 0, 'at least one insight source must be a real Reddit post, not only LinkedIn snapshots');
+  const db = new Database(process.env.DB_PATH ?? './data/app.db', { readonly: true });
+  try {
+    for (const src of postSources) {
+      const row = db.prepare('select id from posts where id = ?').get(src.id);
+      assert.ok(row, `insight source post_id ${src.id} must exist in posts (no fabricated source ids)`);
+    }
+  } finally {
+    db.close();
+  }
+});
+
 test('pipeline-health flow: reports both naive and brightdata comparison keys', async () => {
   const j = await get('/api/pipeline-health');
   assert.ok(j.naive && typeof j.naive === 'object', 'naive key should be present');
