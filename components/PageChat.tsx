@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Card, CardBody, Input, Button, Link } from '@heroui/react';
+import { Card, CardBody, Link } from '@heroui/react';
+import { ArrowRight, Sparkles } from 'lucide-react';
 
 type Citation = { post_id: string; quote: string; url: string };
 
@@ -59,18 +60,30 @@ export function PageChat({ scope, label }: { scope: 'trends' | 'competitor' | 'o
   return (
     <Card className="glass-card bg-transparent">
       <CardBody className="flex flex-col gap-4 p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-[#eef1f0]">Ask about {label}</h2>
-        <form onSubmit={submit} className="flex flex-wrap items-center gap-3">
-          <Input
+        <h2 className="flex items-center gap-2 font-display text-xl font-semibold text-[#eef1f0]">
+          <Sparkles className="h-5 w-5 text-teal" aria-hidden="true" />
+          Ask about {label}
+        </h2>
+        <form onSubmit={submit} className="relative">
+          <input
             aria-label="Ask a question"
             placeholder={`Ask a question about ${label.toLowerCase()}...`}
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            className="max-w-md"
+            className="w-full rounded-full border border-silver/15 bg-white/[0.04] py-3.5 pl-5 pr-14 text-[#eef1f0] placeholder:text-silver-dim/70 outline-none backdrop-blur-sm transition focus:border-teal/60 focus:bg-white/[0.06] focus:ring-2 focus:ring-teal/20"
           />
-          <Button type="submit" isLoading={loading} className="bg-teal text-[#0a0d0c]">
-            Ask
-          </Button>
+          <button
+            type="submit"
+            aria-label="Ask"
+            disabled={loading || !question.trim()}
+            className="absolute right-1.5 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-teal text-[#0a0d0c] transition disabled:cursor-not-allowed disabled:opacity-40 enabled:hover:scale-105 enabled:hover:brightness-110"
+          >
+            {loading ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#0a0d0c]/30 border-t-[#0a0d0c]" />
+            ) : (
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
         </form>
 
         {loading && (
