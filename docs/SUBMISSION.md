@@ -42,8 +42,13 @@ Home page, the "Naive fetch vs. Bright Data" card.
   param means a 200 with an empty body, which looks exactly like a block but isn't.
   Then run the auto-repair drill (`docs/AUTO_REPAIR.md`): break it, watch it fail
   loud with a real cause, repair it, watch it recover.
-- **Port**: [open the workspace, show what's actually cataloged, say it plainly]
-- **SigNoz**: [open the dashboard, show real traces from the routes you just hit]
+- **Port**: [open the workspace] Every time a build agent finishes a piece of work, it
+  logs it here — a real catalog of what got built, not something we typed up after
+  the fact.
+- **SigNoz**: [open the dashboard] Every stage of the app — fetching Reddit,
+  detecting trends, every API call — reports its own health straight from the code:
+  how long it took, how many records came back, what broke. If Bright Data ever
+  fails, it shows up here as a real signal, not a silent empty page.
 
 **3:10–4:30 — Demo**
 Click through: Trends (search a term, show the related-terms it picked up on its
